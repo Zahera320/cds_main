@@ -1,0 +1,1207 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>DocuParse — Document Processing System</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:"Segoe UI",system-ui,sans-serif;background:#f1f5f9;color:#1e293b;min-height:100vh;line-height:1.5}
+#topbar{background:#0f172a;color:#f8fafc;padding:0 28px;height:56px;display:flex;align-items:center;gap:18px;position:sticky;top:0;z-index:200;box-shadow:0 1px 3px rgba(0,0,0,.4)}
+#topbar .logo{font-size:17px;font-weight:700;letter-spacing:-.3px;display:flex;align-items:center;gap:8px}
+#topbar .logo em{color:#38bdf8;font-style:normal}
+#topbar .spacer{flex:1}
+#user-pill{background:#1e3a5f;border-radius:20px;padding:5px 14px;font-size:13px;color:#94a3b8;display:none;align-items:center;gap:8px}
+#user-pill.show{display:flex}
+#user-pill strong{color:#f0f9ff}
+#user-pill button{background:none;border:1px solid #475569;color:#94a3b8;border-radius:12px;padding:2px 10px;cursor:pointer;font-size:11px;transition:all .15s}
+#user-pill button:hover{background:#334155;color:#f1f5f9}
+#hlt{width:8px;height:8px;border-radius:50%;background:#64748b;flex-shrink:0;transition:background .3s}
+#hlt.on{background:#22c55e}
+#hlt.off{background:#ef4444}
+.page{max-width:1280px;margin:0 auto;padding:28px 24px;display:flex;gap:24px}
+.sidebar{flex:0 0 340px}
+.main{flex:1;min-width:0;display:flex;flex-direction:column;gap:24px}
+.card{background:#fff;border-radius:14px;border:1px solid #e2e8f0;overflow:hidden}
+.ch{padding:16px 22px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;gap:10px}
+.ch h2{font-size:14px;font-weight:700;color:#0f172a;flex:1}
+.snum{width:26px;height:26px;border-radius:50%;background:#0ea5e9;color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.snum.done{background:#22c55e}
+.snum.lock{background:#cbd5e1;color:#94a3b8}
+.cb{padding:20px 22px}
+.tabs{display:flex;gap:0;margin-bottom:18px;border-radius:8px;background:#f1f5f9;padding:3px}
+.tab{flex:1;text-align:center;padding:7px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;color:#64748b;transition:all .15s}
+.tab.active{background:#fff;color:#0f172a;box-shadow:0 1px 3px rgba(0,0,0,.1)}
+.fld{margin-bottom:14px}
+.fld label{display:block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#64748b;margin-bottom:5px}
+.fld input{width:100%;padding:9px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:14px;color:#0f172a;background:#fafafa;transition:border-color .15s}
+.fld input:focus{outline:none;border-color:#0ea5e9;background:#fff;box-shadow:0 0 0 3px rgba(14,165,233,.1)}
+.fld .hint{font-size:11px;color:#94a3b8;margin-top:3px}
+.btn{padding:9px 18px;border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:700;transition:opacity .15s,transform .1s;display:inline-flex;align-items:center;justify-content:center;gap:6px}
+.btn:hover:not(:disabled){opacity:.88}
+.btn:active:not(:disabled){transform:scale(.97)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.bn-primary{background:#0ea5e9;color:#fff}
+.bn-success{background:#22c55e;color:#fff}
+.bn-ghost{background:#f1f5f9;color:#475569;border:1.5px solid #e2e8f0}
+.bn-ghost:hover:not(:disabled){background:#e2e8f0}
+.bn-sm{padding:5px 12px;font-size:12px}
+.bn-full{width:100%}
+.alert{padding:10px 13px;border-radius:8px;font-size:13px;margin-top:12px;display:none;white-space:pre-wrap;word-break:break-word;line-height:1.5}
+.alert.show{display:block}
+.a-ok{background:#f0fdf4;border:1px solid #86efac;color:#166534}
+.a-err{background:#fef2f2;border:1px solid #fca5a5;color:#7f1d1d}
+.a-inf{background:#f0f9ff;border:1px solid #7dd3fc;color:#075985}
+.dzone{border:2px dashed #cbd5e1;border-radius:10px;padding:28px 18px;text-align:center;cursor:pointer;transition:all .2s;background:#f8fafc;margin-bottom:14px}
+.dzone input{display:none}
+.dzone:hover,.dzone.drag{border-color:#0ea5e9;background:#f0f9ff}
+.dzone .icon{font-size:36px;margin-bottom:8px;display:block}
+.dzone .lbl{font-size:13px;color:#64748b}
+.dzone .lbl strong{color:#0ea5e9}
+.dzone .chosen{font-size:13px;color:#0f172a;font-weight:600;margin-top:8px;display:none}
+.dzone.has-file .chosen{display:block}
+.dzone.has-file .lbl{display:none}
+.dzone.has-file{border-color:#22c55e;background:#f0fdf4}
+.pbar-wrap{margin-bottom:12px;display:none}
+.pbar-wrap.show{display:block}
+.pbar{height:6px;background:#e2e8f0;border-radius:3px;overflow:hidden}
+.pfill{height:100%;background:linear-gradient(90deg,#0ea5e9,#22c55e);border-radius:3px;width:0%;transition:width .3s}
+.plbl{text-align:center;font-size:12px;color:#64748b;margin-top:4px}
+.stbadge{display:inline-flex;align-items:center;gap:4px;border-radius:20px;padding:2px 9px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.3px}
+.sdot{width:6px;height:6px;border-radius:50%;display:inline-block}
+.s-up{background:#fef9c3;color:#713f12}.s-up .sdot{background:#eab308}
+.s-pr{background:#dbeafe;color:#1e3a8a;animation:pbg 1.5s infinite}.s-pr .sdot{background:#3b82f6;animation:pdot 1.5s infinite}
+.s-ok{background:#dcfce7;color:#14532d}.s-ok .sdot{background:#22c55e}
+.s-fl{background:#fee2e2;color:#7f1d1d}.s-fl .sdot{background:#ef4444}
+@keyframes pbg{0%,100%{background:#dbeafe}50%{background:#bfdbfe}}
+@keyframes pdot{0%,100%{opacity:1}50%{opacity:.3}}
+.dlist{display:flex;flex-direction:column;gap:10px}
+.dcard{border:1.5px solid #e2e8f0;border-radius:10px;padding:14px 16px;background:#fff;cursor:pointer;transition:all .2s;display:grid;grid-template-columns:1fr auto;grid-template-rows:auto auto auto;gap:5px 12px}
+.dcard:hover{border-color:#0ea5e9;box-shadow:0 0 0 3px rgba(14,165,233,.08)}
+.dcard.active{border-color:#0ea5e9;background:#f0f9ff}
+.dcard .dname{font-weight:700;font-size:14px;color:#0f172a;word-break:break-word;grid-column:1}
+.dcard .dst{grid-column:2;grid-row:1/3;align-self:center}
+.dcard .dmeta{font-size:12px;color:#94a3b8;grid-column:1;display:flex;gap:10px;flex-wrap:wrap}
+.dcard .dact{grid-column:1/-1;display:flex;gap:6px;padding-top:8px;border-top:1px solid #f1f5f9;margin-top:2px}
+.empty{text-align:center;padding:48px 20px;color:#94a3b8}
+.empty .ei{font-size:52px;margin-bottom:12px}
+.empty p{font-size:14px}
+.empty small{font-size:12px;color:#cbd5e1}
+.wr{position:relative}
+.lck{position:absolute;inset:0;background:rgba(241,245,249,.88);border-radius:14px;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:8px;pointer-events:none}
+.lck p{font-size:13px;color:#64748b;font-weight:600}
+#vp{display:none}
+#vp.show{display:flex;flex-direction:column}
+.vh{padding:16px 22px;background:#0f172a;color:#f8fafc;display:flex;align-items:center;gap:12px;border-radius:14px 14px 0 0}
+.vh h3{font-size:14px;font-weight:700;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vstats{display:flex;gap:16px;padding:12px 22px;background:#1e293b;flex-wrap:wrap}
+.vs{font-size:12px;color:#94a3b8;display:flex;flex-direction:column;gap:2px}
+.vs strong{color:#f8fafc;font-size:15px;font-weight:700}
+.vbody{border:1px solid #e2e8f0;border-top:none;border-radius:0 0 14px 14px;background:#f8fafc}
+.pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px;padding:20px}
+.pc{background:#fff;border:1.5px solid #e2e8f0;border-radius:10px;overflow:hidden;transition:box-shadow .2s}
+.pc:hover{box-shadow:0 4px 20px rgba(15,23,42,.12)}
+.pthumb{height:180px;background:#f1f5f9;display:flex;align-items:center;justify-content:center;border-bottom:1px solid #e2e8f0;overflow:hidden;cursor:zoom-in;position:relative}
+.pthumb img{max-width:100%;max-height:100%;object-fit:contain;transition:transform .2s}
+.pthumb:hover img{transform:scale(1.03)}
+.pthumb .ni{color:#cbd5e1;font-size:48px}
+.pover{position:absolute;inset:0;background:rgba(15,23,42,0);display:flex;align-items:center;justify-content:center;transition:background .2s;font-size:24px;opacity:0}
+.pthumb:hover .pover{background:rgba(15,23,42,.35);opacity:1}
+.pinfo{padding:12px 14px}
+.pnr{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.pn{font-weight:700;font-size:13px;color:#0f172a}
+.pbadges{display:flex;gap:5px;flex-wrap:wrap}
+.bdg{font-size:10px;font-weight:700;border-radius:4px;padding:2px 6px;text-transform:uppercase;letter-spacing:.3px}
+.b-vlm{background:#fef3c7;color:#92400e}
+.b-nat{background:#dcfce7;color:#14532d}
+.b-chr{background:#ede9fe;color:#4c1d95}
+.b-img{background:#dcfce7;color:#14532d}
+.b-noi{background:#fee2e2;color:#7f1d1d}
+.b-rel{background:#dbeafe;color:#1e40af}
+.b-nrel{background:#f1f5f9;color:#64748b}
+.b-type{background:#f0fdf4;color:#166534;border:1px solid #bbf7d0}
+.b-type.t-LIGHTING_PLAN{background:#fef9c3;color:#713f12;border-color:#fde68a}
+.b-type.t-SCHEDULE{background:#dbeafe;color:#1e3a8a;border-color:#93c5fd}
+.b-type.t-SYMBOLS_LEGEND{background:#ede9fe;color:#4c1d95;border-color:#c4b5fd}
+.b-type.t-COVER{background:#dcfce7;color:#14532d;border-color:#86efac}
+.b-type.t-DEMOLITION_PLAN{background:#fee2e2;color:#7f1d1d;border-color:#fca5a5}
+.b-type.t-POWER_PLAN{background:#ffedd5;color:#7c2d12;border-color:#fed7aa}
+.b-type.t-FIRE_ALARM{background:#fce7f3;color:#831843;border-color:#f9a8d4}
+.b-type.t-RISER{background:#e0e7ff;color:#312e81;border-color:#a5b4fc}
+.b-type.t-DETAIL{background:#f1f5f9;color:#334155;border-color:#cbd5e1}
+.b-type.t-SITE_PLAN{background:#ccfbf1;color:#134e4a;border-color:#5eead4}
+.b-type.t-OTHER{background:#f8fafc;color:#64748b;border-color:#e2e8f0}
+.b-src{background:#f8fafc;color:#94a3b8;font-size:9px;border:1px solid #e2e8f0}
+.b-sheet{background:#eef2ff;color:#3730a3;font-size:11px;font-weight:700;border:1.5px solid #818cf8;letter-spacing:.5px}
+.rel-dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex-shrink:0}
+.rel-dot.yes{background:#22c55e}
+.rel-dot.no{background:#e2e8f0}
+.pc.relevant{border-color:#22c55e;border-width:2px}
+.pc.not-relevant{opacity:.65}
+.pc.not-relevant:hover{opacity:1}
+.filter-bar{display:flex;gap:8px;padding:12px 20px;border-bottom:1px solid #e2e8f0;flex-wrap:wrap;align-items:center;background:#fff}
+.filter-bar label{font-size:11px;font-weight:700;text-transform:uppercase;color:#64748b;letter-spacing:.3px}
+.fbtn{font-size:11px;font-weight:600;padding:4px 10px;border-radius:6px;border:1.5px solid #e2e8f0;background:#fff;color:#475569;cursor:pointer;transition:all .15s}
+.fbtn:hover{background:#f1f5f9}
+.fbtn.active{background:#0ea5e9;color:#fff;border-color:#0ea5e9}
+.ptxt{font-size:11.5px;color:#475569;line-height:1.6;max-height:80px;overflow:hidden;position:relative;border-top:1px solid #f1f5f9;padding-top:8px;margin-top:4px;white-space:pre-wrap;word-break:break-word}
+.ptxt.exp{max-height:none}
+.ptxt::after{content:"";position:absolute;bottom:0;left:0;right:0;height:30px;background:linear-gradient(transparent,#fff)}
+.ptxt.exp::after{display:none}
+.ptxt.em{color:#cbd5e1;font-style:italic}
+.tgl{font-size:11px;color:#0ea5e9;cursor:pointer;font-weight:600;margin-top:5px;display:none}
+#modal{display:none;position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,.9);align-items:center;justify-content:center;padding:20px}
+#modal.show{display:flex}
+#modal img{max-width:100%;max-height:100%;border-radius:8px;object-fit:contain}
+#mc{position:fixed;top:16px;right:20px;background:rgba(255,255,255,.15);color:#fff;border:none;width:38px;height:38px;border-radius:50%;font-size:20px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .15s}
+#mc:hover{background:rgba(255,255,255,.3)}
+#mi{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.7);color:#fff;padding:8px 18px;border-radius:20px;font-size:12px;white-space:nowrap}
+.spin{width:20px;height:20px;border-radius:50%;border:2.5px solid #e2e8f0;border-top-color:#0ea5e9;animation:sp .7s linear infinite;display:inline-block}
+@keyframes sp{to{transform:rotate(360deg)}}
+@media(max-width:860px){.page{flex-direction:column}.sidebar{flex:none;width:100%}}
+/* Classification summary panel */
+#cls-panel{display:none;background:#fff;border:1px solid #e2e8f0;border-top:none;padding:16px 22px;border-radius:0}
+#cls-panel.show{display:block}
+.cls-header{display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+.cls-done{background:#dcfce7;color:#14532d;border:1px solid #86efac;border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700}
+.cls-pending{background:#fef9c3;color:#713f12;border:1px solid #fde68a;border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700}
+.cls-none{background:#f1f5f9;color:#64748b;border:1px solid #cbd5e1;border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700}
+.cls-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:640px){.cls-grid{grid-template-columns:1fr}}
+.cls-box{border-radius:8px;padding:10px 14px;font-size:12px}
+.cls-rel{background:#f0fdf4;border:1px solid #bbf7d0}
+.cls-irr{background:#fef2f2;border:1px solid #fecaca}
+.cls-box h4{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px}
+.cls-rel h4{color:#15803d}.cls-irr h4{color:#b91c1c}
+.cls-pnums{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px}
+.cls-pnum{width:28px;height:28px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;cursor:pointer;transition:transform .1s}
+.cls-pnum:hover{transform:scale(1.12)}
+.cls-pnum.rel{background:#22c55e;color:#fff}
+.cls-pnum.irr{background:#e2e8f0;color:#64748b}
+.cls-types{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
+.cls-tbadge{font-size:10px;font-weight:700;border-radius:4px;padding:2px 7px;text-transform:uppercase;letter-spacing:.3px}
+.cls-type-rel{background:#dbeafe;color:#1e40af}
+.cls-type-irr{background:#f1f5f9;color:#64748b;border:1px solid #e2e8f0}
+.cls-breakdown{margin-top:10px;padding-top:10px;border-top:1px solid #f1f5f9}
+.cls-breakdown h4{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#64748b;margin-bottom:6px}
+.cls-row{display:flex;align-items:center;gap:6px;padding:3px 0;font-size:12px}
+.cls-bar{flex:1;height:6px;background:#f1f5f9;border-radius:3px;overflow:hidden}
+.cls-bfill{height:100%;border-radius:3px}
+.cls-bfill.rel{background:#22c55e}.cls-bfill.irr{background:#94a3b8}
+/* ── Tables Panel ─────────────────────────────────────────────────────────── */
+#tbl-panel{display:none;background:#fff;border:1px solid #e2e8f0;border-top:none;padding:14px 22px 18px}
+#tbl-panel.show{display:block}
+.tbl-hdr{display:flex;align-items:center;gap:8px;margin-bottom:12px}
+.tbl-hdr h4{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#0f172a;flex:1;margin:0}
+.tbl-loading{font-size:12px;color:#64748b;display:none}
+.tbl-section{margin-bottom:18px}
+.tbl-sec-title{font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.3px;margin-bottom:7px;padding-bottom:5px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;gap:8px}
+.tbl-cnt{background:#dbeafe;color:#1e3a8a;font-size:10px;font-weight:700;padding:1px 7px;border-radius:9px}
+.tbl-sub{font-size:10px;font-weight:600;color:#94a3b8;margin:8px 0 4px;text-transform:uppercase;letter-spacing:.3px}
+.tbl-wrap{overflow-x:auto;margin-bottom:8px;border:1px solid #e2e8f0;border-radius:8px}
+table.etbl{width:100%;border-collapse:collapse;font-size:12px}
+table.etbl th,table.etbl td{padding:6px 10px;border:1px solid #e2e8f0;text-align:left;vertical-align:top;white-space:pre-wrap;word-break:break-word;max-width:320px}
+table.etbl thead tr{background:#f8fafc}
+table.etbl thead th{font-weight:700;color:#0f172a;font-size:11px}
+table.etbl tbody tr:nth-child(even){background:#f8fafc}
+table.etbl tbody td{color:#334155}
+.tbl-empty{text-align:center;color:#94a3b8;font-size:13px;padding:20px}
+.tbl-group{margin-bottom:20px;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden}
+.tbl-group-hdr{background:#f1f5f9;padding:10px 16px;display:flex;align-items:center;gap:10px;border-bottom:1px solid #e2e8f0}
+.tbl-group-hdr .grp-label{font-size:13px;font-weight:700;color:#0f172a;flex:1}
+.tbl-group-hdr .grp-badge{font-size:10px;font-weight:700;padding:2px 8px;border-radius:9px}
+.grp-badge.fixture{background:#dcfce7;color:#166534}
+.grp-badge.panel{background:#fee2e2;color:#991b1b}
+.grp-badge.other{background:#f1f5f9;color:#64748b}
+.tbl-group-body{padding:12px 16px}
+.tbl-group .tbl-page-lbl{font-size:10px;font-weight:600;color:#94a3b8;margin:10px 0 4px;text-transform:uppercase;letter-spacing:.3px}
+.tbl-group .tbl-page-lbl:first-child{margin-top:0}
+.tbl-page-badge{font-size:10px;font-weight:600;color:#64748b;background:#f1f5f9;padding:2px 8px;border-radius:9px}
+.tbl-fix-section{margin-top:12px;padding:10px 14px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px}
+.tbl-fix-section .fix-title{font-size:11px;font-weight:700;color:#166534;margin-bottom:8px;text-transform:uppercase;letter-spacing:.3px}
+/* ── Fixtures Panel ──────────────────────────────────────────────────────── */
+#fix-panel{display:none;background:#fff;border:1px solid #e2e8f0;border-top:none;padding:14px 22px 18px}
+#fix-panel.show{display:block}
+.fix-hdr{display:flex;align-items:center;gap:8px;margin-bottom:12px}
+.fix-hdr h4{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#0f172a;flex:1;margin:0}
+.fix-loading{font-size:12px;color:#64748b;display:none}
+.fix-wrap{overflow-x:auto;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:8px}
+.fix-meta{font-size:11px;color:#94a3b8;margin-bottom:8px;display:flex;gap:14px;flex-wrap:wrap;align-items:center}
+.fix-cnt-badge{background:#dbeafe;color:#1e3a8a;font-size:10px;font-weight:700;padding:2px 8px;border-radius:9px}
+.fix-vlm-badge{background:#ede9fe;color:#4c1d95;font-size:10px;font-weight:700;padding:2px 8px;border-radius:9px}
+table.ftbl{width:100%;border-collapse:collapse;font-size:12px}
+table.ftbl th,table.ftbl td{padding:6px 10px;border:1px solid #e2e8f0;text-align:left;vertical-align:top;white-space:pre-wrap;word-break:break-word;max-width:240px}
+table.ftbl thead tr{background:#f8fafc}
+table.ftbl thead th{font-weight:700;color:#0f172a;font-size:11px}
+table.ftbl tbody tr:nth-child(even){background:#f8fafc}
+table.ftbl tbody td{color:#334155}
+table.ftbl tbody td.code-cell{font-weight:700;color:#0f172a;background:#f0fdf4}
+.fix-empty{text-align:center;color:#94a3b8;font-size:13px;padding:20px}
+/* ── Takeoff Panel ────────────────────────────────────────────────────────── */
+#tkf-panel{display:none;background:#fff;border:1px solid #e2e8f0;border-top:none;padding:14px 22px 18px}
+#tkf-panel.show{display:block}
+.tkf-hdr{display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+.tkf-hdr h4{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#0f172a;flex:1;margin:0}
+.tkf-loading{font-size:12px;color:#64748b;display:none}
+.tkf-status{font-size:10px;font-weight:700;padding:3px 10px;border-radius:20px;text-transform:uppercase;letter-spacing:.3px}
+.tkf-status.completed{background:#dcfce7;color:#14532d}
+.tkf-status.partial{background:#fef9c3;color:#713f12}
+.tkf-status.failed{background:#fee2e2;color:#7f1d1d}
+.tkf-status.not_run{background:#f1f5f9;color:#64748b}
+.tkf-status.running{background:#dbeafe;color:#1e40af;animation:tkfPulse 1.5s infinite}
+@keyframes tkfPulse{0%,100%{opacity:1}50%{opacity:.5}}
+.tkf-stats{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:16px}
+.tkf-stat{background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:12px 18px;text-align:center;min-width:100px}
+.tkf-stat .val{font-size:22px;font-weight:800;color:#0f172a;display:block}
+.tkf-stat .lbl{font-size:10px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.3px}
+.tkf-stat.highlight{background:#f0fdf4;border-color:#86efac}
+.tkf-stat.highlight .val{color:#16a34a}
+.tkf-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px;margin-bottom:16px}
+.tkf-fix{background:#fff;border:1.5px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center;transition:border-color .15s}
+.tkf-fix:hover{border-color:#0ea5e9}
+.tkf-fix .code{font-size:16px;font-weight:800;color:#0f172a}
+.tkf-fix .cnt{font-size:22px;font-weight:800;color:#0ea5e9;margin:4px 0}
+.tkf-fix .cnt.zero{color:#cbd5e1}
+.tkf-fix .clbl{font-size:9px;color:#94a3b8;text-transform:uppercase}
+.tkf-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid #f1f5f9}
+.tkf-overlay-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;margin-top:14px}
+.tkf-overlay-card{border:1.5px solid #e2e8f0;border-radius:10px;overflow:hidden;cursor:pointer;transition:box-shadow .2s}
+.tkf-overlay-card:hover{box-shadow:0 4px 20px rgba(15,23,42,.12)}
+.tkf-overlay-card img{width:100%;display:block;background:#f1f5f9;min-height:150px}
+.tkf-overlay-card .olbl{padding:8px 12px;font-size:12px;font-weight:600;color:#475569;background:#f8fafc;border-top:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between}
+.tkf-empty{text-align:center;color:#94a3b8;font-size:13px;padding:24px}
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <div class="logo">&#128196; Docu<em>Parse</em></div>
+  <div class="spacer"></div>
+  <div id="user-pill">
+    <strong id="uname">&#8212;</strong>
+    <button onclick="logout()">Log out</button>
+  </div>
+  <div id="hlt" title="Server health"></div>
+</div>
+
+<div id="modal" onclick="if(event.target===this)closeModal()">
+  <button id="mc" onclick="closeModal()">&#10005;</button>
+  <img id="mimg" src="" alt="Page"/>
+  <div id="mi"></div>
+</div>
+
+<div class="page">
+
+  <!-- SIDEBAR -->
+  <aside class="sidebar">
+
+    <!-- Step 1: Account -->
+    <div class="card" id="auth-card">
+      <div class="ch">
+        <div class="snum" id="sn1">1</div>
+        <h2>Account</h2>
+        <span id="auth-lbl" style="font-size:12px;color:#94a3b8"></span>
+      </div>
+      <div class="cb" id="auth-body">
+        <div class="tabs" id="auth-tabs">
+          <div class="tab active" onclick="switchTab('reg')">Register</div>
+          <div class="tab"       onclick="switchTab('log')">Login</div>
+        </div>
+        <div id="reg-form">
+          <div class="fld"><label>Full name</label><input id="rn" type="text" placeholder="e.g. Alice Smith" autocomplete="name"/></div>
+          <div class="fld"><label>Email address</label><input id="re" type="email" placeholder="alice@example.com" autocomplete="email"/></div>
+          <div class="fld"><label>Password</label><input id="rp" type="password" placeholder="Minimum 6 characters" autocomplete="new-password"/><div class="hint">At least 6 characters</div></div>
+          <button class="btn bn-success bn-full" onclick="register()">&#10004; Create account</button>
+          <div id="ra" class="alert"></div>
+        </div>
+        <div id="log-form" style="display:none">
+          <div class="fld"><label>Email address</label><input id="le" type="email" placeholder="alice@example.com" autocomplete="email"/></div>
+          <div class="fld"><label>Password</label><input id="lp" type="password" placeholder="Your password" autocomplete="current-password"/></div>
+          <button class="btn bn-primary bn-full" onclick="login()">&#8594; Log in</button>
+          <div id="la" class="alert"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 2: Upload -->
+    <div class="wr" style="margin-top:20px">
+      <div class="card">
+        <div class="ch">
+          <div class="snum lock" id="sn2">2</div>
+          <h2>Upload Document</h2>
+        </div>
+        <div class="cb">
+          <div class="dzone" id="dz"
+               ondragover="onDrag(event,true)" ondragleave="onDrag(event,false)" ondrop="onDrop(event)"
+               onclick="document.getElementById('fi').click()">
+            <input type="file" id="fi" accept=".pdf,.zip" onchange="onFile()"/>
+            <span class="icon">&#128194;</span>
+            <div class="lbl">Drop a file here or <strong>click to browse</strong><br/><small style="color:#94a3b8">PDF or ZIP &bull; max 100 MB</small></div>
+            <div class="chosen" id="cfl"></div>
+          </div>
+          <div class="pbar-wrap" id="pbw">
+            <div class="pbar"><div class="pfill" id="pf"></div></div>
+            <div class="plbl" id="plbl">Uploading&#8230;</div>
+          </div>
+          <button class="btn bn-primary bn-full" id="ubtn" onclick="uploadFile()" disabled>&#8679; Upload</button>
+          <div id="ua" class="alert"></div>
+        </div>
+      </div>
+      <div class="lck" id="ulck"><span style="font-size:28px">&#128274;</span><p>Login first to upload</p></div>
+    </div>
+
+  </aside>
+
+  <!-- MAIN -->
+  <div class="main">
+
+    <!-- Step 3: Documents -->
+    <div class="wr">
+      <div class="card">
+        <div class="ch">
+          <div class="snum lock" id="sn3">3</div>
+          <h2>My Documents</h2>
+          <button class="btn bn-ghost bn-sm" id="rfbtn" onclick="loadDocs()" disabled title="Refresh">&#8635; Refresh</button>
+        </div>
+        <div class="cb" style="padding:14px 22px">
+          <div id="da" class="alert"></div>
+          <div id="dl">
+            <div class="empty"><div class="ei">&#128193;</div><p>No documents yet</p><small>Log in and upload a PDF to get started</small></div>
+          </div>
+        </div>
+      </div>
+      <div class="lck" id="dlck"><span style="font-size:28px">&#128274;</span><p>Login to see documents</p></div>
+    </div>
+
+    <!-- Step 4: Page Viewer -->
+    <div id="vp">
+      <div class="vh">
+        <span style="font-size:18px">&#128269;</span>
+        <h3 id="vtitle">&#8212;</h3>
+        <span id="cls-status-pill"></span>
+        <button class="btn bn-ghost bn-sm" onclick="closeViewer()" style="background:rgba(255,255,255,.1);color:#f8fafc;border-color:rgba(255,255,255,.2)">&#10005; Close</button>
+      </div>
+      <div class="vstats" id="vstats"></div>
+      <!-- Classification Summary Panel -->
+      <div id="cls-panel">
+        <div class="cls-header">
+          <span id="cls-done-badge"></span>
+          <span id="cls-summary-title" style="font-size:13px;font-weight:600;color:#0f172a">Page Classification Summary</span>
+          <button id="cls-reclassify-btn" class="btn bn-primary bn-sm" onclick="reclassifyDoc()" style="display:none;font-size:11px">&#9654; Re-classify Pages</button>
+          <button class="btn bn-ghost bn-sm" onclick="toggleClsPanel()" id="cls-toggle-btn" style="margin-left:auto;font-size:11px">&#9650; Hide</button>
+        </div>
+        <div class="cls-grid" id="cls-grid"></div>
+        <div class="cls-breakdown" id="cls-breakdown"></div>
+      </div>
+      <!-- Tables Panel: extracted tables from relevant pages -->
+      <div id="tbl-panel">
+        <div class="tbl-hdr">
+          <span style="font-size:15px">&#128202;</span>
+          <h4>Light Fixture Schedule Tables</h4>
+          <span class="tbl-loading" id="tbl-loading">&#9203; Extracting&#8230;</span>
+          <button class="btn bn-primary bn-sm" id="tbl-csv-btn" onclick="downloadTablesCsv()" style="display:none;font-size:11px">&#11015; Download CSV</button>
+          <button class="btn bn-ghost bn-sm" onclick="toggleTblPanel()" id="tbl-toggle-btn" style="font-size:11px">&#9650; Hide</button>
+        </div>
+        <div id="tbl-body"></div>
+      </div>
+      <!-- Takeoff / Autocount Pipeline Panel -->
+      <div id="tkf-panel">
+        <div class="tkf-hdr">
+          <span style="font-size:15px">&#128200;</span>
+          <h4>Takeoff &mdash; Fixture Count &amp; Overlay</h4>
+          <span class="tkf-loading" id="tkf-loading">&#9203; Loading&#8230;</span>
+          <span id="tkf-status-badge"></span>
+          <button class="btn bn-ghost bn-sm" onclick="toggleTkfPanel()" id="tkf-toggle-btn" style="font-size:11px">&#9650; Hide</button>
+        </div>
+        <div id="tkf-body"></div>
+      </div>
+      <!-- Fixtures Panel: structured luminaire fixture records -->
+      <div id="fix-panel">
+        <div class="fix-hdr">
+          <span style="font-size:15px">&#128161;</span>
+          <h4>Luminaire Fixture Schedule</h4>
+          <span class="fix-loading" id="fix-loading">&#9203; Extracting&#8230;</span>
+          <button class="btn bn-ghost bn-sm" onclick="toggleFixPanel()" id="fix-toggle-btn" style="font-size:11px">&#9650; Hide</button>
+        </div>
+        <div id="fix-meta" class="fix-meta"></div>
+        <div id="fix-body"></div>
+      </div>
+      <div class="vbody">
+        <div id="vfilter" class="filter-bar" style="display:none">
+          <label>Filter:</label>
+          <button class="fbtn active" onclick="filterPages('all',this)">All</button>
+          <button class="fbtn" onclick="filterPages('relevant',this)">&#9989; Relevant</button>
+          <button class="fbtn" onclick="filterPages('not-relevant',this)">&#9898; Not Relevant</button>
+          <span style="flex:1"></span>
+          <label style="margin-left:8px">Type:</label>
+          <select id="type-filter" onchange="filterPages(this.value?'type:'+this.value:currentFilter)" style="font-size:12px;padding:3px 8px;border-radius:6px;border:1.5px solid #e2e8f0">
+            <option value="">All types</option>
+          </select>
+        </div>
+        <div id="valert" class="alert" style="margin:16px 20px 0"></div>
+        <div class="pgrid" id="pgrid">
+          <div class="empty"><div class="ei">&#8987;</div><p>Loading pages&#8230;</p></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+var tok="",usr=null,adoc="",adocType="",pollT=null,currentFilter="all",cachedPages=[],clsPanelVisible=true,tblPanelVisible=true,fixPanelVisible=true,tkfPanelVisible=true;
+var POLL=4000;
+var $=function(id){return document.getElementById(id)};
+var esc=function(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")};
+var fmt=function(b){return b<1024?b+" B":b<1048576?(b/1024).toFixed(1)+" KB":(b/1048576).toFixed(2)+" MB"};
+
+function sa(id,msg,type,ms){var e=$(id);e.className="alert show a-"+type;e.textContent=msg;if(ms)setTimeout(function(){e.className="alert";e.textContent=""},ms);}
+function ha(id){var e=$(id);e.className="alert";e.textContent=""}
+function ae(d){if(!d)return"Unknown error";if(typeof d.detail==="string")return d.detail;if(Array.isArray(d.detail))return d.detail.map(function(e){return(e.loc?e.loc.slice(-1)[0]+": ":"")+e.msg}).join("\n");return JSON.stringify(d,null,2)}
+
+async function ping(){
+  try{var r=await fetch("/health");$("hlt").className=r.status===200?"on":"off"}
+  catch{$("hlt").className="off"}
+}
+
+function switchTab(t){
+  $("reg-form").style.display=t==="reg"?"":"none";
+  $("log-form").style.display=t==="log"?"":"none";
+  var tabs=$("auth-tabs").querySelectorAll(".tab");
+  tabs[0].classList.toggle("active",t==="reg");
+  tabs[1].classList.toggle("active",t==="log");
+  ha("ra");ha("la");
+}
+
+async function register(){
+  ha("ra");
+  var n=$("rn").value.trim(),e=$("re").value.trim(),p=$("rp").value;
+  if(!n||!e||!p){sa("ra","Please fill in all fields.","err");return}
+  var btn=document.querySelector("#reg-form .btn");btn.disabled=true;btn.textContent="Creating...";
+  try{
+    var r=await fetch("/auth/register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:n,email:e,password:p})});
+    var d=await r.json();
+    if(r.ok){sa("ra","Account created! Logging you in...","ok");setTimeout(function(){doLogin(e,p)},700)}
+    else sa("ra",ae(d),"err");
+  }catch(ex){sa("ra","Network error: "+ex.message,"err")}
+  finally{btn.disabled=false;btn.textContent="\u2714 Create account"}
+}
+
+async function login(){
+  ha("la");
+  var e=$("le").value.trim(),p=$("lp").value;
+  if(!e||!p){sa("la","Enter email and password.","err");return}
+  var btn=document.querySelector("#log-form .btn");btn.disabled=true;btn.textContent="Logging in...";
+  try{await doLogin(e,p)}
+  finally{btn.disabled=false;btn.textContent="\u2192 Log in"}
+}
+
+async function doLogin(email,pass){
+  var r=await fetch("/auth/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:email,password:pass})});
+  var d=await r.json();
+  if(r.ok){tok=d.access_token;usr=d.user;onLoggedIn();sa("la","Welcome, "+d.user.name+"!","ok",3000)}
+  else{sa("la",ae(d),"err");sa("ra",ae(d),"err")}
+}
+
+function onLoggedIn(){
+  $("user-pill").classList.add("show");$("uname").textContent=usr.name;
+  $("sn1").className="snum done";$("sn1").textContent="\u2713";
+  $("sn2").className="snum";$("sn3").className="snum";
+  $("auth-lbl").textContent="Logged in";
+  $("ulck").style.display="none";$("dlck").style.display="none";
+  $("ubtn").disabled=false;$("rfbtn").disabled=false;
+  $("auth-body").innerHTML="<div style='font-size:13px;color:#22c55e;font-weight:600'>\u2714 Logged in as <strong>"+esc(usr.name)+"</strong><br/><span style='color:#94a3b8;font-weight:400'>"+esc(usr.email)+"</span></div>";
+  loadDocs();
+}
+
+function logout(){
+  tok="";usr=null;adoc="";
+  clearInterval(pollT);pollT=null;
+  closeViewer();
+  $("user-pill").classList.remove("show");
+  $("sn2").className="snum lock";$("sn3").className="snum lock";
+  $("ulck").style.display="";$("dlck").style.display="";
+  $("ubtn").disabled=true;$("rfbtn").disabled=true;
+  $("dl").innerHTML="<div class='empty'><div class='ei'>&#128193;</div><p>No documents yet</p><small>Log in and upload a PDF to get started</small></div>";
+  $("auth-body").innerHTML="<div class='tabs' id='auth-tabs'><div class='tab active' onclick=\"switchTab('reg')\">Register</div><div class='tab' onclick=\"switchTab('log')\">Login</div></div><div id='reg-form'><div class='fld'><label>Full name</label><input id='rn' type='text' placeholder='e.g. Alice Smith' autocomplete='name'/></div><div class='fld'><label>Email address</label><input id='re' type='email' placeholder='alice@example.com' autocomplete='email'/></div><div class='fld'><label>Password</label><input id='rp' type='password' placeholder='Minimum 6 characters' autocomplete='new-password'/><div class='hint'>At least 6 characters</div></div><button class='btn bn-success bn-full' onclick='register()'>\u2714 Create account</button><div id='ra' class='alert'></div></div><div id='log-form' style='display:none'><div class='fld'><label>Email address</label><input id='le' type='email' placeholder='alice@example.com' autocomplete='email'/></div><div class='fld'><label>Password</label><input id='lp' type='password' placeholder='Your password' autocomplete='current-password'/></div><button class='btn bn-primary bn-full' onclick='login()'>\u2192 Log in</button><div id='la' class='alert'></div></div>";
+  $("sn1").className="snum";$("auth-lbl").textContent="";
+}
+
+function onDrag(e,a){e.preventDefault();$("dz").classList.toggle("drag",a)}
+function onDrop(e){e.preventDefault();$("dz").classList.remove("drag");if(e.dataTransfer.files.length){$("fi").files=e.dataTransfer.files;onFile()}}
+function onFile(){var f=$("fi").files[0];if(!f)return;$("dz").classList.add("has-file");$("cfl").textContent="\uD83D\uDCCE "+f.name+"  ("+fmt(f.size)+")";ha("ua")}
+
+async function uploadFile(){
+  if(!tok){sa("ua","Please log in first.","err");return}
+  var fi=$("fi");if(!fi.files.length){sa("ua","Choose a file first.","err");return}
+  var file=fi.files[0],form=new FormData();form.append("file",file);
+  var pw=$("pbw"),pf=$("pf"),pl=$("plbl");
+  pw.classList.add("show");pf.style.width="0%";pl.textContent="Uploading...";
+  ha("ua");$("ubtn").disabled=true;
+  var fake=0,tick=setInterval(function(){fake=Math.min(fake+Math.random()*12,88);pf.style.width=fake+"%"},200);
+  try{
+    var r=await fetch("/documents/upload",{method:"POST",headers:{"Authorization":"Bearer "+tok},body:form});
+    clearInterval(tick);pf.style.width="100%";pl.textContent="Done!";
+    var d=await r.json();
+    if(r.ok){
+      sa("ua","\u2714 Uploaded \""+d.filename+"\"\nStatus: "+d.status+"\nPages will be extracted in the background.","ok");
+      $("dz").classList.remove("has-file");$("cfl").textContent="";fi.value="";
+      await loadDocs();startPoll();
+    }else sa("ua",ae(d),"err");
+  }catch(ex){clearInterval(tick);sa("ua","Network error: "+ex.message,"err")}
+  finally{$("ubtn").disabled=false;setTimeout(function(){pw.classList.remove("show");pf.style.width="0%"},1800)}
+}
+
+async function loadDocs(){
+  if(!tok)return;ha("da");
+  try{
+    var r=await fetch("/documents/?limit=200",{headers:{"Authorization":"Bearer "+tok}});
+    var list=await r.json();
+    if(!r.ok){sa("da",ae(list),"err");return}
+    renderDocs(list);
+  }catch(ex){sa("da","Network error: "+ex.message,"err")}
+}
+
+function renderDocs(list){
+  if(!list.length){$("dl").innerHTML="<div class='empty'><div class='ei'>&#128196;</div><p>No documents yet</p><small>Upload a PDF or ZIP using the panel on the left</small></div>";return}
+  $("dl").innerHTML="<div class='dlist'>"+list.map(function(doc){
+    var cls=doc.document_id===adoc?"dcard active":"dcard";
+    var ico=doc.file_type==="pdf"?"&#128196;":"&#128440;";
+    var viewLbl=doc.file_type==="zip"?"&#128440; View Archive":"&#128269; View Pages";
+    var batchBadge=doc.batch_id?"<span style='display:inline-block;background:#dbeafe;color:#1d4ed8;font-size:9px;font-weight:600;padding:1px 6px;border-radius:3px;margin-left:4px' title='Batch: "+esc(doc.batch_id)+"'>BATCH</span>":"";
+    return "<div class='"+cls+"' id='dc-"+doc.document_id+"' onclick=\"openDoc('"+doc.document_id+"','"+esc(doc.filename)+"','"+doc.status+"','"+doc.file_type+"')\">"
+      +"<div class='dname'>"+ico+" "+esc(doc.filename)+batchBadge+"</div>"
+      +"<div class='dst'>"+stBadge(doc.status)+"</div>"
+      +"<div class='dmeta'><span>"+doc.file_type.toUpperCase()+"</span><span>"+fmt(doc.file_size)+"</span><span>"+relTime(doc.upload_time)+"</span></div>"
+      +"<div class='dact'>"
+        +"<button class='btn bn-ghost bn-sm' onclick=\"event.stopPropagation();openDoc('"+doc.document_id+"','"+esc(doc.filename)+"','"+doc.status+"','"+doc.file_type+"')\">" +viewLbl+"</button>"
+        +"<button class='btn bn-ghost bn-sm' onclick=\"event.stopPropagation();refreshDoc('"+doc.document_id+"')\">&#8635; Refresh Status</button>"
+      +"</div>"
+    +"</div>"
+  }).join("")+"</div>";
+}
+
+function stBadge(s){
+  var m={uploaded:["s-up","Uploaded"],processing:["s-pr","Processing..."],completed:["s-ok","Completed"],failed:["s-fl","Failed"]};
+  var v=m[s]||["s-up",s];
+  return "<span class='stbadge "+v[0]+"'><span class='sdot'></span>"+v[1]+"</span>"
+}
+
+function relTime(iso){
+  var d=new Date(iso),diff=Math.floor((new Date()-d)/1000);
+  if(diff<60)return diff+"s ago";if(diff<3600)return Math.floor(diff/60)+"m ago";
+  if(diff<86400)return Math.floor(diff/3600)+"h ago";return d.toLocaleDateString();
+}
+
+async function refreshDoc(id){
+  if(!tok)return;
+  try{
+    var r=await fetch("/documents/"+id,{headers:{"Authorization":"Bearer "+tok}});
+    var d=await r.json();if(!r.ok)return;
+    var c=$("dc-"+id);if(c){var p=c.querySelector(".dst");if(p)p.innerHTML=stBadge(d.status)}
+    if(id===adoc&&d.status==="completed"&&$("vp").classList.contains("show"))loadPages(id);
+  }catch(_){}
+}
+
+function startPoll(){
+  if(pollT)return;
+  pollT=setInterval(async function(){
+    if(!tok){clearInterval(pollT);pollT=null;return}
+    try{
+      var r=await fetch("/documents/",{headers:{"Authorization":"Bearer "+tok}});
+      var list=await r.json();if(!r.ok)return;
+      var any=list.some(function(d){return d.status==="processing"});
+      renderDocs(list);
+      if(adoc&&$("vp").classList.contains("show")){
+        var cur=list.find(function(d){return d.document_id===adoc});
+        if(cur&&cur.status==="completed"&&adocType!=="zip")loadPages(adoc);
+      }
+      if(!any){clearInterval(pollT);pollT=null}
+    }catch(_){}
+  },POLL);
+}
+
+function toggleTblPanel(){
+  tblPanelVisible=!tblPanelVisible;
+  var p=$("tbl-panel"),btn=$("tbl-toggle-btn");
+  if(tblPanelVisible){p.classList.add("show");if(btn)btn.textContent="\u25b2 Hide";}
+  else{p.classList.remove("show");if(btn)btn.textContent="\u25bc Show tables";}
+}
+
+function toggleFixPanel(){
+  fixPanelVisible=!fixPanelVisible;
+  var p=$("fix-panel"),btn=$("fix-toggle-btn");
+  if(fixPanelVisible){p.classList.add("show");if(btn)btn.textContent="\u25b2 Hide";}
+  else{p.classList.remove("show");if(btn)btn.textContent="\u25bc Show fixtures";}
+}
+
+function toggleTkfPanel(){
+  tkfPanelVisible=!tkfPanelVisible;
+  var p=$("tkf-panel"),btn=$("tkf-toggle-btn");
+  if(tkfPanelVisible){p.classList.add("show");if(btn)btn.textContent="\u25b2 Hide";}
+  else{p.classList.remove("show");if(btn)btn.textContent="\u25bc Show takeoff";}
+}
+
+async function loadTakeoff(id){
+  if(!tok||!id)return;
+  var panel=$("tkf-panel"),body=$("tkf-body"),lbl=$("tkf-loading"),badge=$("tkf-status-badge");
+  if(!panel||!body)return;
+  panel.classList.remove("show");
+  body.innerHTML="";
+  if(badge)badge.innerHTML="";
+  if(lbl)lbl.style.display="inline";
+  try{
+    var r=await fetch("/documents/"+id+"/takeoff",{headers:{"Authorization":"Bearer "+tok}});
+    if(!r.ok){if(lbl)lbl.style.display="none";return;}
+    var d=await r.json();
+    if(lbl)lbl.style.display="none";
+    var isBatch=d.source==="batch";
+    var srcLabel=isBatch?"<span style='display:inline-block;background:#dbeafe;color:#1d4ed8;font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;margin-left:8px;vertical-align:middle'>BATCH RESULTS</span>":"";
+    // Status badge
+    if(badge)badge.innerHTML="<span class='tkf-status "+d.pipeline_status+"'>"+d.pipeline_status.replace(/_/g," ")+"</span>"+srcLabel;
+    if(d.pipeline_status==="not_run"){
+      body.innerHTML="<div class='tkf-empty'>&#128200; Autocount pipeline has not run yet for this document.<br/><button class='btn bn-primary bn-sm' onclick='rerunTakeoff()' style='margin-top:12px'>&#9654; Run Takeoff Pipeline</button></div>";
+      if(tkfPanelVisible)panel.classList.add("show");
+      return;
+    }
+    if(d.pipeline_status==="running"){
+      body.innerHTML="<div class='tkf-empty'>&#9203; Takeoff pipeline is running&hellip; Results will appear automatically.<br/><small style='color:#94a3b8'>This may take a few minutes for large documents.</small></div>";
+      if(tkfPanelVisible)panel.classList.add("show");
+      // Auto-refresh after a few seconds
+      setTimeout(function(){ loadTakeoff(id); }, 5000);
+      return;
+    }
+    var html="";
+    if(isBatch){
+      html+="<div style='background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:12px;color:#1e40af'>&#128279; <strong>Combined Batch Results</strong> &mdash; These takeoff results are generated by combining fixture schedules and lighting plans from all PDFs in this batch.</div>";
+    }
+    // Stats row
+    var fc=d.fixture_counts||{},keys=Object.keys(fc),total=d.total_fixtures_found||0;
+    html+="<div class='tkf-stats'>";
+    html+="<div class='tkf-stat highlight'><span class='val'>"+total+"</span><span class='lbl'>Total Found</span></div>";
+    html+="<div class='tkf-stat'><span class='val'>"+keys.length+"</span><span class='lbl'>Fixture Types</span></div>";
+    html+="<div class='tkf-stat'><span class='val'>"+(d.overlay_images?d.overlay_images.length:0)+"</span><span class='lbl'>Overlay Pages</span></div>";
+    html+="</div>";
+    // Fixture grid
+    if(keys.length){
+      html+="<div class='tkf-grid'>";
+      keys.sort(function(a,b){return fc[b]-fc[a]}).forEach(function(k){
+        html+="<div class='tkf-fix'><div class='code'>"+esc(k)+"</div><div class='cnt"+(fc[k]===0?" zero":"")+"'>"+fc[k]+"</div><div class='clbl'>found</div></div>";
+      });
+      html+="</div>";
+    }
+    // Overlay images
+    if(d.overlay_images&&d.overlay_images.length){
+      html+="<h4 style='font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#64748b;margin:8px 0'>&#128444; Annotated Overlay Pages</h4>";
+      html+="<div class='tkf-overlay-grid'>";
+      d.overlay_images.forEach(function(img,i){
+        var pageN=i+1;
+        var imgUrl="/documents/"+encodeURIComponent(id)+"/takeoff/overlay?page="+pageN+"&token="+encodeURIComponent(tok);
+        html+="<div class='tkf-overlay-card' onclick=\"openModal('"+imgUrl+"','Takeoff Overlay \u2014 Page "+pageN+"')\">"
+          +"<img src='"+imgUrl+"' alt='Overlay page "+pageN+"' loading='lazy'/>"
+          +"<div class='olbl'><span>Overlay Page "+pageN+"</span><span class='bdg b-img'>&#128269; Click to zoom</span></div>"
+          +"</div>";
+      });
+      html+="</div>";
+    }
+    // Action buttons
+    html+="<div class='tkf-actions'>";
+    if(d.schedule_csv_available)
+      html+="<button class='btn bn-ghost bn-sm' onclick='downloadTkfScheduleCsv()'>&#11015; Schedule CSV</button>";
+    if(d.split_pdf_available)
+      html+="<button class='btn bn-ghost bn-sm' onclick='downloadTkfSplitPdf()'>&#11015; Lighting Plans PDF</button>";
+    html+="<button class='btn bn-primary bn-sm' onclick='rerunTakeoff()'>&#8635; Re-run Pipeline</button>";
+    html+="</div>";
+    body.innerHTML=html;
+    if(tkfPanelVisible)panel.classList.add("show");
+  }catch(ex){if(lbl)lbl.style.display="none";console.warn("Takeoff load error:",ex);}
+}
+
+function downloadTkfScheduleCsv(){
+  if(!tok||!adoc)return;
+  var a=document.createElement("a");
+  a.href="/documents/"+encodeURIComponent(adoc)+"/takeoff/schedule-csv?token="+encodeURIComponent(tok);
+  a.download="lighting_schedule_"+adoc+".csv";
+  document.body.appendChild(a);a.click();document.body.removeChild(a);
+}
+
+function downloadTkfSplitPdf(){
+  if(!tok||!adoc)return;
+  var a=document.createElement("a");
+  a.href="/documents/"+encodeURIComponent(adoc)+"/takeoff/split-pdf?token="+encodeURIComponent(tok);
+  a.download="lighting_plans_"+adoc+".pdf";
+  document.body.appendChild(a);a.click();document.body.removeChild(a);
+}
+
+async function rerunTakeoff(){
+  if(!tok||!adoc)return;
+  try{
+    var r=await fetch("/documents/"+adoc+"/takeoff/rerun",{method:"POST",headers:{"Authorization":"Bearer "+tok}});
+    var d=await r.json();
+    if(r.ok){
+      sa("valert","\u23f3 Takeoff pipeline re-run started \u2014 results will refresh shortly\u2026","inf");
+      // Poll for completion
+      var attempts=0;
+      var poll=setInterval(async function(){
+        attempts++;
+        sa("valert","\u23f3 Running takeoff pipeline\u2026 ("+Math.round(attempts*3)+"s elapsed)","inf");
+        try{
+          var tr=await fetch("/documents/"+adoc+"/takeoff",{headers:{"Authorization":"Bearer "+tok}});
+          var td=await tr.json();
+          if(td.pipeline_status==="completed"){
+            clearInterval(poll);
+            await loadTakeoff(adoc);
+            ha("valert");
+            sa("valert","\u2714 Takeoff complete \u2014 "+td.total_fixtures_found+" fixtures found!","ok",7000);
+          }else if(td.pipeline_status==="running"||td.pipeline_status==="not_run"){
+            // Still running, keep polling
+            if(attempts>=100){
+              clearInterval(poll);
+              await loadTakeoff(adoc);
+              sa("valert","Takeoff is taking longer than expected \u2014 please refresh.","inf",8000);
+            }
+          }else if(attempts>=100){
+            clearInterval(poll);
+            await loadTakeoff(adoc);
+            sa("valert","Takeoff is taking longer than expected \u2014 please refresh.","inf",8000);
+          }
+        }catch(_){}
+      },3000);
+    }else{
+      sa("valert",d.detail||"Takeoff rerun failed","err",5000);
+    }
+  }catch(ex){sa("valert","Network error: "+ex.message,"err",5000);}
+}
+
+async function loadFixtures(id){
+  if(!tok||!id)return;
+  var panel=$("fix-panel"),body=$("fix-body"),meta=$("fix-meta"),lbl=$("fix-loading");
+  if(!panel||!body)return;
+  panel.classList.remove("show");
+  body.innerHTML="";
+  if(meta)meta.innerHTML="";
+  if(lbl)lbl.style.display="inline";
+  try{
+    var r=await fetch("/documents/"+id+"/fixtures",{headers:{"Authorization":"Bearer "+tok}});
+    if(!r.ok){if(lbl)lbl.style.display="none";return;}
+    var d=await r.json();
+    if(lbl)lbl.style.display="none";
+    if(!d.fixtures||!d.fixtures.length){
+      body.innerHTML="<div class='fix-empty'>&#128161; No luminaire fixture records found on schedule pages</div>";
+    }else{
+      // Meta row
+      var metaHtml="<span class='fix-cnt-badge'>"+d.total_fixtures+" fixture"+(d.total_fixtures===1?"":"s")+" found</span>";
+      if(d.schedule_pages_scanned)metaHtml+="<span>Schedule pages scanned: "+d.schedule_pages_scanned+"</span>";
+      if(d.schedule_sheet_codes&&d.schedule_sheet_codes.length)metaHtml+="<span>Sheets: "+d.schedule_sheet_codes.map(function(c){return"<span style='background:#eef2ff;color:#3730a3;font-weight:700;font-size:11px;padding:1px 6px;border-radius:3px;border:1.5px solid #818cf8;margin:0 2px'>"+esc(c)+"</span>";}).join("")+"</span>";
+      if(d.plan_pages_scanned)metaHtml+="<span>Plan pages scanned: "+d.plan_pages_scanned+"</span>";
+      if(d.vlm_used)metaHtml+="<span class='fix-vlm-badge'>&#129303; VLM Assist</span>";
+      if(meta)meta.innerHTML=metaHtml;
+      // Build table — only render columns that have at least one non-empty value
+      var cols=[
+        {key:"code",label:"Code"},
+        {key:"description",label:"Description"},
+        {key:"mounting",label:"Mounting"},
+        {key:"fixture_style",label:"Style / Catalog"},
+        {key:"voltage",label:"Voltage"},
+        {key:"lumens",label:"Lumens"},
+        {key:"cct",label:"CCT"},
+        {key:"dimming",label:"Dimming"},
+        {key:"max_va",label:"W / VA"}
+      ];
+      var activeCols=cols.filter(function(c){return d.fixtures.some(function(f){return f[c.key]&&f[c.key].trim()});});
+      var html="<div class='fix-wrap'><table class='ftbl'><thead><tr>"+activeCols.map(function(c){return"<th>"+esc(c.label)+"</th>";}).join("")+"</tr></thead><tbody>";
+      d.fixtures.forEach(function(f){
+        html+="<tr>"+activeCols.map(function(c){
+          var v=f[c.key]||"";
+          return"<td"+(c.key==="code"?" class='code-cell'":"")+">"+esc(v)+"</td>";
+        }).join("")+"</tr>";
+      });
+      html+="</tbody></table></div>";
+      body.innerHTML=html;
+    }
+    if(fixPanelVisible)panel.classList.add("show");
+  }catch(ex){if(lbl)lbl.style.display="none";console.warn("Fixture extraction error:",ex);}
+}
+
+async function loadTables(id){
+  if(!tok||!id)return;
+  var panel=$("tbl-panel"),body=$("tbl-body"),lbl=$("tbl-loading"),csvBtn=$("tbl-csv-btn");
+  if(!panel||!body)return;
+  panel.classList.remove("show");
+  body.innerHTML="";
+  if(csvBtn)csvBtn.style.display="none";
+  if(lbl)lbl.style.display="inline";
+  try{
+    var r=await fetch("/documents/"+id+"/tables/fixture-schedules",{headers:{"Authorization":"Bearer "+tok}});
+    if(!r.ok){if(lbl)lbl.style.display="none";return;}
+    var d=await r.json();
+    if(lbl)lbl.style.display="none";
+    if(!d.tables||!d.tables.length){
+      body.innerHTML="<div class='tbl-empty'>&#128161; No Light Fixture Schedule tables found on relevant pages</div>";
+    }else{
+      if(csvBtn)csvBtn.style.display="";
+      var html="";
+      d.tables.forEach(function(tbl,ti){
+        html+="<div class='tbl-group'>";
+        html+="<div class='tbl-group-hdr'>";
+        html+="<span class='grp-label'>Light Fixture Schedule</span>";
+        html+="<span class='grp-badge fixture'>Fixture Schedule</span>";
+        var scBdg=tbl.sheet_code?"<span class='bdg b-sheet' style='margin-left:6px;font-size:12px' title='Sheet code'>"+esc(tbl.sheet_code)+"</span>":"";
+        html+="<span class='tbl-page-badge'>Page "+tbl.page_number+" "+scBdg+"</span>";
+        html+="</div>";
+        html+="<div class='tbl-group-body'>";
+        html+="<div class='tbl-wrap'><table class='etbl'>";
+        var rows=tbl.rows||[];
+        var _noteRe=/^\s*(KEY\s*NOTES?|NOTES?\s*[:.]|GENERAL\s*NOTES?|REMARKS?|KEYNOTES?|\*|†|‡)/i;
+        rows.forEach(function(row,ri){
+          if(ri>0&&row.length>0&&_noteRe.test(String(row[0])))return;
+          var tag=ri===0?"th":"td";
+          html+="<tr>"+row.map(function(cell){return"<"+tag+">"+esc(String(cell))+"</"+tag+">"}).join("")+"</tr>";
+        });
+        html+="</table></div>";
+        if(tbl.fixtures&&tbl.fixtures.length){
+          html+="<div class='tbl-fix-section'>";
+          html+="<div class='fix-title'>&#128161; Inventory Automation &#8212; "+tbl.fixtures.length+" fixture"+(tbl.fixtures.length===1?"":"s")+" extracted</div>";
+          var cols=[{key:"code",label:"Code"},{key:"description",label:"Description"},{key:"mounting",label:"Mounting"},{key:"fixture_style",label:"Style"},{key:"voltage",label:"Voltage"},{key:"lumens",label:"Lumens"},{key:"cct",label:"CCT"},{key:"dimming",label:"Dimming"},{key:"max_va",label:"W/VA"}];
+          var activeCols=cols.filter(function(c){return tbl.fixtures.some(function(f){return f[c.key]&&f[c.key].trim()})});
+          html+="<div class='fix-wrap'><table class='ftbl'><thead><tr>"+activeCols.map(function(c){return"<th>"+esc(c.label)+"</th>"}).join("")+"</tr></thead><tbody>";
+          tbl.fixtures.forEach(function(f){
+            html+="<tr>"+activeCols.map(function(c){var v=f[c.key]||'';return"<td"+(c.key==="code"?" class='code-cell'":"")+">"+esc(v)+"</td>"}).join("")+"</tr>";
+          });
+          html+="</tbody></table></div></div>";
+        }
+        html+="</div></div>";
+      });
+      body.innerHTML=html;
+    }
+    if(tblPanelVisible)panel.classList.add("show");
+  }catch(ex){if(lbl)lbl.style.display="none";console.warn("Table extraction error:",ex)}
+}
+
+function toggleClsPanel(){
+  clsPanelVisible=!clsPanelVisible;
+  var p=$("cls-panel"),btn=$("cls-toggle-btn");
+  if(clsPanelVisible){p.classList.add("show");if(btn)btn.textContent="\u25b2 Hide";}
+  else{p.classList.remove("show");if(btn)btn.textContent="\u25bc Show summary";}
+}
+
+async function reclassifyDoc(){
+  if(!tok||!adoc)return;
+  var btn=$("cls-reclassify-btn");
+  btn.disabled=true;btn.textContent="\u23f3 Running...";
+  try{
+    var r=await fetch("/documents/"+adoc+"/reclassify",{method:"POST",headers:{"Authorization":"Bearer "+tok}});
+    var d=await r.json();
+    if(r.ok){
+      sa("valert","\u23f3 Reclassification started \u2014 may take up to 60s for large PDFs\u2026","inf");
+      // Poll every 4s until classification is done (up to 20 attempts = 80s)
+      var attempts=0;
+      var poll=setInterval(async function(){
+        attempts++;
+        sa("valert","\u23f3 Classifying pages\u2026 ("+Math.round(attempts*4)+"s elapsed)","inf");
+        var summary=await fetch("/documents/"+adoc+"/classification-summary",{headers:{"Authorization":"Bearer "+tok}}).then(function(rs){return rs.json()}).catch(function(){return null});
+        if(summary&&summary.classification_done){
+          clearInterval(poll);
+          await Promise.all([loadClassificationSummary(adoc),loadPages(adoc)]);
+          ha("valert");
+          sa("valert","\u2714 Classification complete! \u2014 "+summary.relevant_pages+" relevant, "+summary.irrelevant_pages+" not relevant.","ok",7000);
+        }else if(attempts>=20){
+          clearInterval(poll);
+          await Promise.all([loadClassificationSummary(adoc),loadPages(adoc)]);
+          sa("valert","Classification is taking longer than expected \u2014 please refresh in a moment.","inf",8000);
+        }
+      },4000);
+    }else{
+      sa("valert",d.detail||"Reclassification failed","err",5000);
+      btn.disabled=false;btn.textContent="\u25b6 Re-classify Pages";
+    }
+  }catch(ex){
+    sa("valert","Network error: "+ex.message,"err",5000);
+    btn.disabled=false;btn.textContent="\u25b6 Re-classify Pages";
+  }
+}
+
+async function loadClassificationSummary(id){
+  if(!tok)return;
+  $("cls-panel").classList.remove("show");
+  $("cls-status-pill").innerHTML="";
+  try{
+    var r=await fetch("/documents/"+id+"/classification-summary",{headers:{"Authorization":"Bearer "+tok}});
+    if(!r.ok)return;
+    var s=await r.json();
+    // Status pill in header
+    var pill;
+    if(s.classification_message){
+      pill="<span class='cls-none'>&#9888; Classification Skipped</span>";
+    }else if(s.classification_done){
+      pill="<span class='cls-done'>&#10003; Classification Done</span>";
+    }else if(s.status==="processing"||s.status==="uploaded"){
+      pill="<span class='cls-pending'>&#9203; Classification Pending</span>";
+    }else{
+      pill="<span class='cls-none'>No Classification</span>";
+    }
+    $("cls-status-pill").innerHTML=pill;
+    // Show Re-classify button when classification is missing or incomplete
+    var rBtn=$("cls-reclassify-btn");
+    if(rBtn){
+      var needsClassify=!s.classification_done&&!s.classification_message&&(s.status==="completed"||s.status==="failed");
+      rBtn.style.display=needsClassify?"":"none";
+      rBtn.disabled=false;
+      rBtn.textContent="\u25b6 Re-classify Pages";
+    }
+    // If classification was skipped, show the message and return
+    if(s.classification_message){
+      $("cls-done-badge").innerHTML=pill;
+      $("cls-grid").innerHTML="<div style='padding:16px 20px;color:#92400e;background:#fef3c7;border-radius:8px;text-align:center;font-size:13px'>&#9888; "+esc(s.classification_message)+"</div>";
+      $("cls-breakdown").innerHTML="";
+      if(clsPanelVisible)$("cls-panel").classList.add("show");
+      return;
+    }
+    if(!s.classification_done&&s.total_pages===0)return;
+    $("cls-done-badge").innerHTML=pill;
+    // Build sheet code lookup
+    var psc=s.page_sheet_codes||{};
+    // Build relevant box
+    var relNums=s.relevant_page_numbers.map(function(n){
+      var sc=psc[n]?(" <span style='background:#eef2ff;color:#3730a3;font-weight:700;font-size:10px;padding:0 4px;border-radius:3px;border:1px solid #818cf8;margin-left:2px'>"+esc(psc[n])+"</span>"):"";
+      return "<span class='cls-pnum rel' title='Page "+n+(psc[n]?" \u2014 "+psc[n]:"")+" \u2014 Relevant' onclick=\"scrollToPage("+n+")\">"+n+sc+"</span>";
+    }).join("");
+    var relTypes=(s.relevant_types||[]).map(function(t){
+      return "<span class='cls-tbadge cls-type-rel'>"+fmtType(t)+"</span>";
+    }).join("");
+    // Build irrelevant box
+    var irrNums=s.irrelevant_page_numbers.map(function(n){
+      var sc=psc[n]?(" <span style='background:#eef2ff;color:#3730a3;font-weight:700;font-size:10px;padding:0 4px;border-radius:3px;border:1px solid #818cf8;margin-left:2px'>"+esc(psc[n])+"</span>"):"";
+      return "<span class='cls-pnum irr' title='Page "+n+(psc[n]?" \u2014 "+psc[n]:"")+" \u2014 Not Relevant' onclick=\"scrollToPage("+n+")\">"+n+sc+"</span>";
+    }).join("");
+    var irrTypes=(s.irrelevant_types||[]).map(function(t){
+      return "<span class='cls-tbadge cls-type-irr'>"+fmtType(t)+"</span>";
+    }).join("");
+    $("cls-grid").innerHTML=
+      "<div class='cls-box cls-rel'><h4>&#9989; Relevant Pages ("+s.relevant_pages+")</h4>"
+      +"<div class='cls-pnums'>"+relNums+"</div>"
+      +"<div class='cls-types'>"+relTypes+"</div></div>"
+      +"<div class='cls-box cls-irr'><h4>&#9898; Not Relevant Pages ("+s.irrelevant_pages+")</h4>"
+      +"<div class='cls-pnums'>"+irrNums+"</div>"
+      +"<div class='cls-types'>"+irrTypes+"</div></div>";
+    // Type breakdown bar chart
+    var td=s.type_breakdown||{},total=s.total_pages,RELEVANT_TYPES=["LIGHTING_PLAN","SCHEDULE","SYMBOLS_LEGEND","COVER"];
+    var rows=Object.keys(td).sort(function(a,b){return td[b]-td[a]}).map(function(t){
+      var cnt=td[t],pct=total?Math.round(cnt/total*100):0;
+      var isRel=RELEVANT_TYPES.indexOf(t)>=0;
+      return "<div class='cls-row'>"
+        +"<span style='width:130px;flex-shrink:0'><span class='bdg b-type t-"+t+"'>"+fmtType(t)+"</span></span>"
+        +"<div class='cls-bar'><div class='cls-bfill "+(isRel?"rel":"irr")+"' style='width:"+pct+"%'></div></div>"
+        +"<span style='width:36px;text-align:right;color:#64748b'>"+cnt+"</span>"
+      +"</div>";
+    }).join("");
+    $("cls-breakdown").innerHTML="<h4>Type Breakdown</h4>"+rows;
+    if(clsPanelVisible)$("cls-panel").classList.add("show");
+  }catch(ex){console.warn("Classification summary error:",ex)}
+}
+
+function scrollToPage(n){
+  // Switch to all-pages view and scroll to that page card
+  if(currentFilter!=="all"){filterPages("all",document.querySelector("#vfilter .fbtn"));}
+  setTimeout(function(){
+    var el=$("pt"+n);
+    if(el)el.closest(".pc").scrollIntoView({behavior:"smooth",block:"center"});
+  },100);
+}
+
+async function openDoc(id,fname,status,ftype){
+  adoc=id;adocType=ftype||"pdf";
+  document.querySelectorAll(".dcard").forEach(function(c){c.classList.remove("active")});
+  var c=$("dc-"+id);if(c)c.classList.add("active");
+  var vp=$("vp");vp.classList.add("show");
+  $("vtitle").textContent=fname;
+  $("vstats").innerHTML="";
+  $("cls-panel").classList.remove("show");
+  $("cls-status-pill").innerHTML="";
+  ha("valert");
+  vp.scrollIntoView({behavior:"smooth",block:"start"});
+
+  if(ftype==="zip"){
+    $("pgrid").innerHTML="<div class='empty'><div class='ei'>&#128440;</div><p>ZIP Archive</p><small>The extracted PDF documents are listed in your document list &mdash; click each one to view its pages</small></div>";
+    if(status==="processing")sa("valert","&#9203; Processing ZIP &mdash; extracted PDFs are being processed and will appear in the list shortly.","inf");
+    // Still load takeoff for ZIP — the endpoint will use batch-level results
+    await loadTakeoff(id);
+    return;
+  }
+
+  $("pgrid").innerHTML="<div class='empty'><div class='ei'><div class='spin'></div></div><p>Loading pages&#8230;</p></div>";
+  if(status==="processing")sa("valert","&#9203; Still processing &#8212; pages will load automatically when ready.","inf");
+  await Promise.all([loadPages(id),loadClassificationSummary(id),loadTables(id),loadFixtures(id),loadTakeoff(id)]);
+}
+
+async function loadPages(id){
+  if(!tok)return;
+  try{
+    var r=await fetch("/documents/"+id+"/pages",{headers:{"Authorization":"Bearer "+tok}});
+    var d=await r.json();
+    if(!r.ok){sa("valert",ae(d),"err");$("pgrid").innerHTML="";return}
+    if(!d.pages||!d.pages.length){
+      var dr=await fetch("/documents/"+id,{headers:{"Authorization":"Bearer "+tok}});
+      var dd=await dr.json();
+      if(dd.status==="processing"){
+        sa("valert","&#9203; Processing in progress &#8212; the list will refresh automatically.","inf");
+        $("pgrid").innerHTML="<div class='empty'><div class='ei'>&#9203;</div><p>Extracting pages&#8230;</p><small>This usually takes a few seconds</small></div>";
+        startPoll();
+      }else if(dd.status==="failed"){
+        sa("valert","&#10060; Processing failed &#8212; the PDF may be corrupt or password-protected.","err");
+        $("pgrid").innerHTML="<div class='empty'><div class='ei'>&#10060;</div><p>Processing failed</p></div>";
+      }else{
+        $("pgrid").innerHTML="<div class='empty'><div class='ei'>&#128233;</div><p>No pages found</p><small>Try refreshing after processing completes</small></div>";
+      }
+      return;
+    }
+    var vlmN=d.pages.filter(function(p){return p.vlm_used}).length;
+    var imgN=d.pages.filter(function(p){return p.image_path}).length;
+    var chars=d.pages.reduce(function(s,p){return s+(p.text_length||0)},0);
+    var relN=d.relevant_pages||0;
+    var irrN=d.irrelevant_pages||0;
+    var hasClassification=d.pages.some(function(p){return p.page_type});
+    $('vstats').innerHTML=
+      "<div class='vs'><strong>"+d.total_pages+"</strong><span>Total pages</span></div>"
+      +(hasClassification?"<div class='vs'><strong>"+relN+"</strong><span>&#9989; Relevant</span></div>":"")
+      +(hasClassification?"<div class='vs'><strong>"+irrN+"</strong><span>&#9898; Not relevant</span></div>":"")
+      +"<div class='vs'><strong>"+(d.pages.length-vlmN)+"</strong><span>&#128221; Native text</span></div>"
+      +"<div class='vs'><strong>"+vlmN+"</strong><span>&#129302; VLM used</span></div>"
+      +"<div class='vs'><strong>"+imgN+"</strong><span>&#128444;&#65039; Images saved</span></div>"
+      +"<div class='vs'><strong>"+chars.toLocaleString()+"</strong><span>Total chars</span></div>";
+    ha("valert");
+
+    // Build type filter dropdown
+    if(hasClassification){
+      var types={};d.pages.forEach(function(p){if(p.page_type)types[p.page_type]=(types[p.page_type]||0)+1});
+      var sel=$("type-filter");if(sel){sel.innerHTML="<option value=''>All types</option>";
+        Object.keys(types).sort().forEach(function(t){sel.innerHTML+="<option value='"+t+"'>"+fmtType(t)+" ("+types[t]+")</option>"});
+      }
+      $("vfilter").style.display="flex";
+    }else{$("vfilter").style.display="none"}
+
+    cachedPages=d.pages;
+    currentFilter="all";
+    renderFilteredPages(d.pages);
+  }catch(ex){sa("valert","Error loading pages: "+ex.message,"err")}
+}
+
+function fmtType(t){return t?t.replace(/_/g," ").replace(/\b\w/g,function(c){return c.toUpperCase()}):"Unknown"}
+
+function filterPages(mode,btn){
+  if(mode.indexOf("type:")===0){currentFilter=mode}
+  else{currentFilter=mode;$("type-filter").value=""}
+  // Update active button
+  if(btn){document.querySelectorAll("#vfilter .fbtn").forEach(function(b){b.classList.remove("active")});btn.classList.add("active")}
+  var filtered=cachedPages;
+  if(mode==="relevant")filtered=cachedPages.filter(function(p){return p.is_relevant});
+  else if(mode==="not-relevant")filtered=cachedPages.filter(function(p){return !p.is_relevant});
+  else if(mode.indexOf("type:")===0){var tp=mode.split(":")[1];filtered=cachedPages.filter(function(p){return p.page_type===tp})}
+  renderFilteredPages(filtered);
+}
+
+function renderFilteredPages(pages){
+  if(!pages.length){$("pgrid").innerHTML="<div class='empty'><div class='ei'>&#128196;</div><p>No pages match this filter</p></div>";return}
+  $("pgrid").innerHTML=pages.map(pageCard).join("");
+  pages.forEach(function(p){
+    var el=$("pt"+p.page_number);
+    if(el&&el.scrollHeight>el.clientHeight+2){var lk=$("tl"+p.page_number);if(lk)lk.style.display="block"}
+  });
+}
+
+function pageCard(p){
+  var txt=(p.extracted_text||"").trim();
+  var hasT=txt.length>0;
+  var relClass=p.is_relevant===true?"relevant":(p.is_relevant===false?"not-relevant":"");
+  var img=p.image_path
+    ?"<img src='/page-image?path="+encodeURIComponent(p.image_path)+"&token="+encodeURIComponent(tok)+"' alt='Page "+p.page_number+"' loading='lazy' onclick=\"openModal(this.src,'Page "+p.page_number+(p.sheet_code?" ["+p.sheet_code+"]":"")+" \u2014 "+(p.vlm_used?"VLM":"Native")+" \u2014 "+p.text_length+" chars"+(p.page_type?" \u2014 "+fmtType(p.page_type):"")+"')\"/><div class='pover'>&#128269;</div>"
+    :"<div class='ni'>&#128444;</div>";
+
+  var typeBdg=p.page_type?"<span class='bdg b-type t-"+p.page_type+"' title='Page type (via "+esc(p.confidence_source||"unknown")+")'>"+fmtType(p.page_type)+"</span>":"";
+  var relBdg="";
+  if(p.is_relevant===true)relBdg="<span class='bdg b-rel' title='Relevant for lighting analysis'><span class='rel-dot yes'></span> Relevant</span>";
+  else if(p.is_relevant===false)relBdg="<span class='bdg b-nrel'><span class='rel-dot no'></span> Not Relevant</span>";
+  var srcBdg=p.confidence_source?"<span class='bdg b-src' title='Classification source'>"+esc(p.confidence_source)+"</span>":"";
+  var codeBdg=p.sheet_code?"<span class='bdg b-sheet' title='Sheet code'>"+esc(p.sheet_code)+"</span>":"";
+  var sheetInline=p.sheet_code?" <span style='font-size:14px;font-weight:700;color:#3730a3;background:#eef2ff;border:1.5px solid #818cf8;padding:1px 8px;border-radius:4px;margin-left:6px'>"+esc(p.sheet_code)+"</span>":"";
+
+  return "<div class='pc "+relClass+"'>"
+    +"<div class='pthumb'>"+img+"</div>"
+    +"<div class='pinfo'>"
+      +"<div class='pnr'><span class='pn'>Page "+p.page_number+sheetInline+"</span>"
+        +"<div class='pbadges'>"
+          +relBdg
+          +(p.vlm_used?"<span class='bdg b-vlm' title='Text extracted by VLM (Vision Language Model)'>VLM</span>":"<span class='bdg b-nat' title='Text read natively from PDF'>Native</span>")
+          +"<span class='bdg b-chr' title='Characters extracted'>"+p.text_length.toLocaleString()+" chars</span>"
+          +(p.image_path?"<span class='bdg b-img'>Image \u2714</span>":"<span class='bdg b-noi'>No image</span>")
+        +"</div>"
+      +"</div>"
+      +"<div style='display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px'>"+codeBdg+typeBdg+srcBdg+"</div>"
+      +"<div class='ptxt"+(hasT?"":" em")+"' id='pt"+p.page_number+"'>"+(hasT?esc(txt):"(No text on this page)")+"</div>"
+      +"<span class='tgl' id='tl"+p.page_number+"' onclick=\"tglTxt("+p.page_number+",this)\">\u25bc Show more</span>"
+    +"</div>"
+  +"</div>"
+}
+
+function tglTxt(n,lk){var e=$("pt"+n);var ex=e.classList.toggle("exp");lk.textContent=ex?"\u25b2 Show less":"\u25bc Show more"}
+
+function closeViewer(){
+  $('vp').classList.remove('show');
+  $('pgrid').innerHTML='';
+  $('cls-panel').classList.remove('show');
+  $('tbl-panel').classList.remove('show');
+  $('tbl-body').innerHTML='';
+  $('fix-panel').classList.remove('show');
+  $('fix-body').innerHTML='';
+  $('fix-meta').innerHTML='';
+  $('tkf-panel').classList.remove('show');
+  $('tkf-body').innerHTML='';
+  $('tkf-status-badge').innerHTML='';
+  $('cls-status-pill').innerHTML='';
+  $('vstats').innerHTML='';
+  adoc='';adocType='';
+  document.querySelectorAll('.dcard').forEach(function(c){c.classList.remove('active')});
+}
+
+function openModal(src,info){$("mimg").src=src;$("mi").textContent=info||"";$("modal").classList.add("show")}
+function closeModal(){$("modal").classList.remove("show");$("mimg").src=""}
+document.addEventListener("keydown",function(e){if(e.key==="Escape")closeModal()});
+
+function downloadTablesCsv(){
+  if(!tok||!adoc)return;
+  var a=document.createElement("a");
+  a.href="/documents/"+encodeURIComponent(adoc)+"/tables/fixture-schedules/csv?token="+encodeURIComponent(tok);
+  a.download="light_fixture_schedule_"+adoc+".csv";
+  document.body.appendChild(a);a.click();document.body.removeChild(a);
+}
+
+// \u2500\u2500 Auto-open document from /viewer/{document_id} URL \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+function getDocIdFromUrl(){
+  var m=window.location.pathname.match(/^\/viewer\/([a-f0-9\-]+)$/i);
+  return m?m[1]:null;
+}
+var _autoDocId=getDocIdFromUrl();
+var _origOnLoggedIn=onLoggedIn;
+onLoggedIn=function(){
+  _origOnLoggedIn();
+  if(_autoDocId){
+    setTimeout(function(){
+      openDocById(_autoDocId);
+      _autoDocId=null;
+    },600);
+  }
+};
+async function openDocById(docId){
+  if(!tok)return;
+  try{
+    var r=await fetch("/documents/"+encodeURIComponent(docId),{headers:{"Authorization":"Bearer "+tok}});
+    if(!r.ok){sa("da","Document not found or access denied.","err",5000);return;}
+    var d=await r.json();
+    openDoc(d.document_id,d.filename,d.status,d.file_type);
+  }catch(ex){sa("da","Error loading document: "+ex.message,"err",5000);}
+}
+
+ping();setInterval(ping,30000);
+</script>
+</body>
+</html>
