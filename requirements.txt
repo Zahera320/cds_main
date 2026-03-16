@@ -13,3 +13,4 @@ pandas>=2.0.0
 docling>=2.70.0
 anthropic>=0.50.0
 google-generativeai==0.8.5
+boto3>=1.26.0

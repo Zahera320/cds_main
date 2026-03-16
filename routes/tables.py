@@ -140,7 +140,7 @@ def _extract_tables_docling(pdf_path, user_id, document_id, relevant_pages_map):
 
     elapsed = time.time() - t0
     result_pages, total_tables, fixture_tables = result
-    logger.info("Docling on-demand extraction took %.1fs for %s — %d tables on %d pages",
+    logger.info("On-demand extraction took %.1fs for %s — %d tables on %d pages",
                 elapsed, pdf_path, total_tables, len(result_pages))
 
     if len(_table_cache) >= _CACHE_MAX:

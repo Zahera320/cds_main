@@ -26,7 +26,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import fitz  # PyMuPDF
 from sqlalchemy.orm import Session
 
-from config import MAX_WORKERS
+from config import MAX_WORKERS, USE_AWS_TEXTRACT_FOR_TABLES
 from database import SessionLocal
 from services.storage_service import StorageService
 from services.document_service import DocumentService
@@ -41,7 +41,6 @@ from .docling_extractor import DoclingExtractor
 from .schedule_parser import ScheduleIsolator
 from .plan_splitter import PlanSplitter
 from .takeoff_generator import TakeoffGenerator
-from .gpu_monitor import log_gpu_status, get_safe_worker_count, check_gpu_available, release_gpu_memory
 from logging_config import get_document_logger
 
 logger = logging.getLogger(__name__)
@@ -118,6 +117,23 @@ def _run_processing(db: Session, document_id: str, user_id: int) -> None:
 
     DocumentService.update_status(db, document, "processing")
 
+    try:
+        _run_processing_inner(db, document, document_id, user_id)
+    except Exception as exc:
+        logger.error(
+            "Unhandled error in processing pipeline for document %s: %s",
+            document_id, exc, exc_info=True,
+        )
+        # Always recover status so the document isn't stuck as 'processing'
+        try:
+            DocumentService.update_status(db, document, "failed")
+        except Exception:
+            pass
+
+
+def _run_processing_inner(db: Session, document, document_id: str, user_id: int) -> None:
+    """Core processing logic — called inside an outer try/except in _run_processing."""
+
     # ── Step 3: Locate PDF ────────────────────────────────────────────────────
     try:
         pdf_path = StorageService.locate_pdf(user_id, document_id)
@@ -142,15 +158,12 @@ def _run_processing(db: Session, document_id: str, user_id: int) -> None:
     pages_dir = StorageService.pages_dir(user_id, document_id)
 
     # ── Step 5 + 6: Parallel page processing ─────────────────────────────────
-    # Check GPU availability before deciding worker count
-    log_gpu_status("pre-processing")
-    gpu_safe_workers = get_safe_worker_count(max_workers=MAX_WORKERS)
-    workers = min(gpu_safe_workers, total_pages)  # respect GPU + page limits
+    workers = min(MAX_WORKERS, total_pages)
     pages_saved = 0
 
     logger.info(
-        "Processing %d pages with %d parallel workers (GPU-safe limit: %d)",
-        total_pages, workers, gpu_safe_workers,
+        "Processing %d pages with %d parallel workers",
+        total_pages, workers,
     )
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
@@ -189,7 +202,6 @@ def _run_processing(db: Session, document_id: str, user_id: int) -> None:
     # Release memory after parallel extraction — images and text buffers
     # from PyMuPDF workers may still be resident.
     _release_memory("post-parallel-extraction")
-    release_gpu_memory("post-parallel-extraction")
 
     # ── Step 6: Classify pages ─────────────────────────────────────────────
     # Build {page_number: extracted_text} map for the classifier.
@@ -315,7 +327,6 @@ def _run_processing(db: Session, document_id: str, user_id: int) -> None:
     # Run the full text+table extraction → schedule isolation →
     # plan splitting → takeoff generation pipeline.
     try:
-        log_gpu_status("pre-autocount")
         _run_autocount_pipeline(
             pdf_path, user_id, document_id, classifications, total_pages
         )
@@ -326,8 +337,6 @@ def _run_processing(db: Session, document_id: str, user_id: int) -> None:
         )
     finally:
         _release_memory("post-autocount")
-        release_gpu_memory("post-autocount")
-        log_gpu_status("post-autocount")
 
     # ── Step 9: Batch Pipeline (if applicable) ────────────────────────────
     # When this document belongs to a batch, check whether ALL sibling
@@ -456,9 +465,29 @@ def _run_autocount_pipeline(
 
     pipeline_dir = StorageService.pipeline_dir(user_id, document_id)
 
-    # Step 8a: Full extraction via Docling (text + tables + images)
-    logger.info(">>> Step 8a: Docling extraction (text, tables, images)...")
-    docling_ext = DoclingExtractor(pdf_path, pipeline_dir)
+    # Derive SCHEDULE-classified page numbers from existing classifications so
+    # Textract only processes those pages (faster + cheaper).
+    schedule_pages = sorted(
+        pn for pn, info in (classifications or {}).items()
+        if info.get("page_type") in ("SCHEDULE", "LIGHTING_SCHEDULE")
+    ) or None  # None → fall back to processing all pages
+
+    if schedule_pages:
+        logger.info(
+            ">>> Step 8a: Textract targeted at %d SCHEDULE page(s): %s",
+            len(schedule_pages), schedule_pages,
+        )
+    else:
+        logger.info(">>> Step 8a: No SCHEDULE pages classified — Textract will scan all pages")
+
+    # Step 8a: Full extraction via Docling or AWS Textract (text + tables + images)
+    engine_msg = "AWS Textract" if USE_AWS_TEXTRACT_FOR_TABLES else "Docling"
+    logger.info(">>> Step 8a: %s extraction (text, tables, images)...", engine_msg)
+    docling_ext = DoclingExtractor(
+        pdf_path, pipeline_dir,
+        use_aws_textract=USE_AWS_TEXTRACT_FOR_TABLES,
+        schedule_page_numbers=schedule_pages,
+    )
     docling_result = docling_ext.run()
     extracted_txt_path = docling_result.combined_txt_path
 
@@ -497,7 +526,8 @@ def _run_autocount_pipeline(
     # Step 8d: Takeoff generation
     if csv_path and split_pdf_path:
         logger.info(">>> Step 8d: Generating Bounding Boxes and Counts...")
-        takeoff = TakeoffGenerator(csv_path, split_pdf_path, pipeline_dir)
+        takeoff = TakeoffGenerator(csv_path, split_pdf_path, pipeline_dir,
+                                   page_sheet_labels=splitter.page_sheet_labels)
         takeoff.generate()
     elif not csv_path and split_pdf_path:
         # Fallback: extract fixture type codes directly from lighting plan pages
@@ -505,7 +535,8 @@ def _run_autocount_pipeline(
         csv_path = _extract_fixture_codes_from_plans(split_pdf_path, pipeline_dir)
         if csv_path:
             logger.info(">>> Step 8d: Generating Bounding Boxes and Counts...")
-            takeoff = TakeoffGenerator(csv_path, split_pdf_path, pipeline_dir)
+            takeoff = TakeoffGenerator(csv_path, split_pdf_path, pipeline_dir,
+                                       page_sheet_labels=splitter.page_sheet_labels)
             takeoff.generate()
         else:
             logger.warning("Skipped takeoff generation: no fixture codes found on plan pages")
@@ -595,59 +626,76 @@ def reclassify_document_pages(document_id: str, user_id: int) -> None:
             logger.error("Document not found in DB: %s", document_id)
             return
 
-        # Locate PDF
+        DocumentService.update_status(db, document, "processing")
+
         try:
-            pdf_path = StorageService.locate_pdf(user_id, document_id)
-        except FileNotFoundError as exc:
-            logger.error(str(exc))
-            return
+            # Locate PDF
+            try:
+                pdf_path = StorageService.locate_pdf(user_id, document_id)
+            except FileNotFoundError as exc:
+                logger.error(str(exc))
+                DocumentService.update_status(db, document, "failed")
+                return
 
-        # Get existing pages
-        all_pages = DocumentService.get_all_pages(db, document_id)
-        if not all_pages:
-            logger.error("No pages found for document %s", document_id)
-            return
+            # Get existing pages
+            all_pages = DocumentService.get_all_pages(db, document_id)
+            if not all_pages:
+                logger.error("No pages found for document %s", document_id)
+                DocumentService.update_status(db, document, "failed")
+                return
 
-        total_pages = len(all_pages)
-        page_texts = {p.page_number: (p.extracted_text or "") for p in all_pages}
+            total_pages = len(all_pages)
+            page_texts = {p.page_number: (p.extracted_text or "") for p in all_pages}
 
-        # Re-run classification
-        classifications = classify_all_pages(pdf_path, page_texts, total_pages)
+            # Re-run classification
+            classifications = classify_all_pages(pdf_path, page_texts, total_pages)
 
-        # VLM verification (optional)
-        from config import VLM_VERIFY
-        if VLM_VERIFY and is_vlm_available():
-            page_image_paths = {
-                p.page_number: p.image_path
-                for p in all_pages
-                if p.image_path
-            }
-            classifications = vlm_verify_all_pages(
-                pdf_path, total_pages, classifications, page_image_paths
-            )
+            # VLM verification (optional)
+            from config import VLM_VERIFY
+            if VLM_VERIFY and is_vlm_available():
+                page_image_paths = {
+                    p.page_number: p.image_path
+                    for p in all_pages
+                    if p.image_path
+                }
+                classifications = vlm_verify_all_pages(
+                    pdf_path, total_pages, classifications, page_image_paths
+                )
 
-        # Update DB with new classification results
-        cls_list = []
-        for pn, info in classifications.items():
-            cls_list.append({
-                "page_number": pn,
-                "page_type": info.get("page_type"),
-                "is_relevant": info.get("is_relevant"),
-            })
-        DocumentService.update_page_classifications(db, document_id, cls_list)
+            # Update DB with new classification results
+            cls_list = []
+            for pn, info in classifications.items():
+                cls_list.append({
+                    "page_number": pn,
+                    "page_type": info.get("page_type"),
+                    "is_relevant": info.get("is_relevant"),
+                })
+            DocumentService.update_page_classifications(db, document_id, cls_list)
 
-        # Re-run autocount pipeline with new classifications
-        try:
-            _run_autocount_pipeline(
-                pdf_path, user_id, document_id, classifications, total_pages
-            )
+            # Re-run autocount pipeline with new classifications
+            try:
+                _run_autocount_pipeline(
+                    pdf_path, user_id, document_id, classifications, total_pages
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Autocount pipeline failed during reclassification for %s: %s",
+                    document_id, exc,
+                )
+
+            DocumentService.update_status(db, document, "completed")
+            logger.info("=== Reclassification complete: document %s ===", document_id)
+
         except Exception as exc:
-            logger.warning(
-                "Autocount pipeline failed during reclassification for %s: %s",
-                document_id, exc,
+            logger.error(
+                "Unhandled error during reclassification for %s: %s",
+                document_id, exc, exc_info=True,
             )
+            try:
+                DocumentService.update_status(db, document, "failed")
+            except Exception:
+                pass
 
-        logger.info("=== Reclassification complete: document %s ===", document_id)
     finally:
         db.close()
 
@@ -701,13 +749,12 @@ def run_batch_autocount_pipeline(batch_id: str, user_id: int) -> None:
 
         # ── Step 1: Docling extraction for each PDF (parallel) ─────────────
         logger.info(">>> Batch step 1: Docling extraction for all PDFs (parallel)...")
-        log_gpu_status("batch-pre-docling")
         combined_txt_path = os.path.join(batch_dir, "combined_text_table.txt")
         batch_schedule_csv = None
 
         def _extract_single_pdf(pdf_path: str) -> tuple:
-            """Run Docling extraction on one PDF — designed for parallel execution."""
-            docling_ext = DoclingExtractor(pdf_path, batch_dir)
+            """Run extraction on one PDF (Docling or AWS Textract) — designed for parallel execution."""
+            docling_ext = DoclingExtractor(pdf_path, batch_dir, use_aws_textract=USE_AWS_TEXTRACT_FOR_TABLES)
             docling_result = docling_ext.run()
             txt_path = docling_result.combined_txt_path
             csv_path = docling_result.schedule_csv_path
@@ -715,7 +762,7 @@ def run_batch_autocount_pipeline(batch_id: str, user_id: int) -> None:
             _release_memory(f"batch-docling-{os.path.basename(pdf_path)}")
             return pdf_path, txt_path, csv_path
 
-        batch_workers = min(get_safe_worker_count(max_workers=MAX_WORKERS), len(doc_infos))
+        batch_workers = min(MAX_WORKERS, len(doc_infos))
         logger.info("Batch Docling extraction: %d PDFs with %d parallel workers",
                     len(doc_infos), batch_workers)
 
@@ -779,7 +826,6 @@ def run_batch_autocount_pipeline(batch_id: str, user_id: int) -> None:
 
         logger.info("=== Batch pipeline complete: batch %s ===", batch_id)
         _release_memory("batch")
-        release_gpu_memory("batch")
     except Exception as exc:
         logger.error(
             "Batch pipeline failed for batch %s: %s", batch_id, exc,

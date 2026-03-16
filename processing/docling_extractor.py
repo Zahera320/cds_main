@@ -95,6 +95,9 @@ class DoclingExtractor:
     """
     Wraps Docling to extract text, tables, and images from a PDF.
 
+    Can optionally use AWS Textract for table extraction instead of Docling.
+    This provides superior table structure recognition for complex schedules.
+
     Outputs are written to organised sub-directories under *output_dir*:
         output_dir/
             images/          — page_0001.png … page_NNNN.png
@@ -105,9 +108,11 @@ class DoclingExtractor:
             lighting_schedule.csv     (if Light Fixture Schedule found)
     """
 
-    def __init__(self, pdf_path: str, output_dir: str):
+    def __init__(self, pdf_path: str, output_dir: str, use_aws_textract: bool = True):
         self.pdf_path = Path(pdf_path)
         self.output_dir = Path(output_dir)
+        # Always use AWS Textract for table extraction
+        self.use_aws_textract = True
 
     # ------------------------------------------------------------------
     #  Main entry point
@@ -130,8 +135,9 @@ class DoclingExtractor:
         result.table_dir = str(tables_dir)
 
         # ----- Configure Docling pipeline ---------------------------------
+        # Docling handles text + images only; table extraction uses AWS Textract
         pipeline_opts = PdfPipelineOptions(
-            do_table_structure=True,
+            do_table_structure=False,
             do_ocr=True,
             generate_page_images=True,
             generate_picture_images=False,  # not used downstream, skip to save RAM
@@ -145,7 +151,8 @@ class DoclingExtractor:
             },
         )
 
-        logger.info("Docling: converting %s …", self.pdf_path.name)
+        engine_note = " (AWS Textract for tables)"
+        logger.info("Docling: converting %s …%s", self.pdf_path.name, engine_note)
         conv_result = converter.convert(str(self.pdf_path))
         doc = conv_result.document
         result.page_count = doc.num_pages()
@@ -160,17 +167,33 @@ class DoclingExtractor:
         result.text_path = str(text_path)
         logger.info("Docling: full text saved → %s (%d chars)", text_path.name, len(full_text))
 
-        # ----- 3. Save individual tables as CSV + build JSON index --------
-        self._save_tables(doc, tables_dir, result)
+        # ----- 3. Extract tables via AWS Textract --------------------------
+        try:
+            from processing.aws_textract_extractor import TextractTableExtractor
+            logger.info("AWS Textract: extracting tables from %s", self.pdf_path.name)
+            textract_extractor = TextractTableExtractor(str(self.pdf_path), str(self.output_dir))
+            textract_result = textract_extractor.run()
+
+            result.table_count = textract_result.table_count
+            result.table_files = textract_result.table_files
+            result.tables_json_path = textract_result.tables_json_path
+
+            logger.info("AWS Textract: extracted %d tables", result.table_count)
+        except Exception as exc:
+            logger.error("AWS Textract extraction failed: %s", exc)
+            raise
 
         # ----- 4. Build combined text+table file (ScheduleIsolator compat) -
-        self._build_combined_file(conv_result, doc, result)
+        if result.tables_json_path:
+            self._build_combined_file_from_json(full_text, result)
+        else:
+            self._build_combined_file(conv_result, doc, result)
 
         # ----- 5. Identify & save Light Fixture Schedule ------------------
-        self._identify_schedule(doc, result)
+        self._identify_schedule_from_json(result)
 
         logger.info(
-            "Docling extraction complete: %d pages, %d tables, schedule=%s",
+            "Extraction complete: %d pages, %d tables, schedule=%s (engine=AWS Textract)",
             result.page_count, result.table_count,
             "found" if result.schedule_csv_path else "not found",
         )
@@ -432,6 +455,133 @@ class DoclingExtractor:
             "Docling: Light Fixture Schedule saved → %s (table #%d, %d rows)",
             schedule_path.name, best["table_index"], best_rows,
         )
+
+    # ------------------------------------------------------------------
+    #  Helpers for AWS Textract Support
+    # ------------------------------------------------------------------
+
+    def _build_combined_file_from_json(self, full_text: str, result: DoclingResult):
+        """
+        Build combined text+table file from JSON tables (for AWS Textract).
+
+        Uses the tables_all.json to reconstruct the combined format
+        compatible with ScheduleIsolator.
+        """
+        if not result.tables_json_path or not os.path.isfile(result.tables_json_path):
+            logger.warning("No tables JSON found for combined file")
+            return
+
+        combined_path = self.output_dir / f"{self.pdf_path.stem}_text_table.txt"
+
+        try:
+            with open(result.tables_json_path, "r", encoding="utf-8") as f:
+                all_tables = json.load(f)
+        except Exception as exc:
+            logger.warning("Failed to load tables JSON for combined file: %s", exc)
+            return
+
+        # Group tables by page number
+        tables_by_page: dict = {}
+        for tbl_entry in all_tables:
+            page_no = tbl_entry.get("page_number", 0)
+            tables_by_page.setdefault(page_no, []).append(tbl_entry)
+
+        table_counter = 0
+        num_pages = result.page_count or 1
+
+        with open(combined_path, "w", encoding="utf-8") as f:
+            for page_no in range(1, num_pages + 1):
+                f.write(f"\n{'=' * 60}\n")
+                f.write(f"=== PAGE {page_no} ===\n")
+                f.write(f"{'=' * 60}\n\n")
+
+                # Page text (simple approximation - just write the full text)
+                # In practice, you might want to parse page boundaries from the text
+                if page_no == 1:
+                    f.write(full_text)
+                    f.write("\n\n")
+
+                # Page tables
+                for tbl_entry in tables_by_page.get(page_no, []):
+                    rows = tbl_entry.get("rows", [])
+                    if not rows:
+                        continue
+
+                    table_counter += 1
+                    f.write(f"\nTABLE {table_counter} ({len(rows)} rows)\n")
+                    f.write("=" * 60 + "\n")
+
+                    buf = io.StringIO()
+                    writer = csv.writer(buf)
+                    for row in rows:
+                        writer.writerow(row)
+                    f.write(buf.getvalue())
+                    f.write("=" * 60 + "\n\n")
+
+                f.write(f"\n{'─' * 40}\n")
+
+        result.combined_txt_path = str(combined_path)
+        logger.info(
+            "Combined text+table file created → %s (%d tables)",
+            combined_path.name, table_counter,
+        )
+
+    def _identify_schedule_from_json(self, result: DoclingResult):
+        """
+        Identify and save Light Fixture Schedule from JSON tables (for AWS Textract).
+
+        Uses the tables_all.json to find and extract the fixture schedule.
+        """
+        if not result.tables_json_path or not os.path.isfile(result.tables_json_path):
+            logger.info("AWS Textract: no tables JSON found for schedule identification")
+            return
+
+        try:
+            with open(result.tables_json_path, "r", encoding="utf-8") as f:
+                all_tables = json.load(f)
+        except Exception as exc:
+            logger.warning("Failed to load tables JSON for schedule: %s", exc)
+            return
+
+        # Use table classification logic
+        from processing.table_extractor import classify_table, strip_rows_above_header
+
+        best = None
+        best_rows = 0
+
+        for tbl_entry in all_tables:
+            try:
+                rows = tbl_entry.get("rows", [])
+                if not rows or len(rows) < 2:
+                    continue
+
+                cls = classify_table(rows)
+                if cls["is_fixture_schedule"]:
+                    if len(rows) > best_rows:
+                        best = {"table_index": tbl_entry.get("table_index"), "rows": rows}
+                        best_rows = len(rows)
+            except Exception as exc:
+                logger.warning("Schedule check failed for table: %s", exc)
+
+        if not best:
+            logger.info("AWS Textract: no Light Fixture Schedule found")
+            return
+
+        # Save as CSV
+        schedule_path = self.output_dir / "lighting_schedule.csv"
+        rows = strip_rows_above_header(best["rows"])
+
+        try:
+            with open(schedule_path, "w", encoding="utf-8", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerows(rows)
+            result.schedule_csv_path = str(schedule_path)
+            logger.info(
+                "AWS Textract: Light Fixture Schedule saved → %s (%d rows)",
+                schedule_path.name, len(rows),
+            )
+        except Exception as exc:
+            logger.warning("Failed to save Light Fixture Schedule: %s", exc)
 
     # ------------------------------------------------------------------
     #  Helpers

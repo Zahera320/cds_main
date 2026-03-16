@@ -23,8 +23,9 @@ import enum
 import re
 import logging
 import gc
+import threading
 from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 from typing import Dict, List, Optional, Tuple, Any
 
 import fitz  # PyMuPDF
@@ -42,6 +43,7 @@ _DOCLING_TIMEOUT = 60
 # Capped at 2 entries (LRU-style) so it never grows unboundedly across requests.
 _DOCLING_CACHE_MAXSIZE = 2
 _docling_doc_cache: OrderedDict = OrderedDict()
+_docling_cache_lock = threading.Lock()  # prevents concurrent conversions
 
 
 def _clear_docling_cache() -> None:
@@ -110,7 +112,7 @@ def _infer_type_from_description(description: str) -> Optional[PageType]:
 
 # Strictly ordered — order matters for disambiguation.
 _TITLE_BLOCK_RULES: List[Tuple[List[str], PageType]] = [
-    (["demolition", "demo plan"],                                  PageType.DEMOLITION_PLAN),
+    (["demolition plan", "demolition layout", "demo plan"],       PageType.DEMOLITION_PLAN),
     (["site plan", "site layout", "photometric"],                  PageType.SITE_PLAN),
     (["roof electrical plan", "electrical roof plan"],              PageType.OTHER),
     (["cover sheet", "title sheet", "coversheet"],                 PageType.COVER),
@@ -203,7 +205,7 @@ def _classify_by_sheet_code(
         return PageType.SYMBOLS_LEGEND
 
     if code_upper.startswith("E1"):
-        if "demo" in title_lower or "demolition" in title_lower:
+        if "demolition plan" in title_lower or "demo plan" in title_lower or title_lower.startswith("demo"):
             return PageType.DEMOLITION_PLAN
         return PageType.LIGHTING_PLAN
 
@@ -212,7 +214,7 @@ def _classify_by_sheet_code(
             return PageType.POWER_PLAN
         if "signal" in title_lower:
             return PageType.OTHER
-        if "demo" in title_lower or "demolition" in title_lower:
+        if "demolition plan" in title_lower or "demo plan" in title_lower or title_lower.startswith("demo"):
             return PageType.DEMOLITION_PLAN
         return PageType.LIGHTING_PLAN
 
@@ -439,37 +441,53 @@ def _get_docling_doc(pdf_path: str):
     """Get or create a cached Docling document for classification.
 
     Uses a size-capped LRU cache (max 2 entries) so memory is bounded.
+    Thread-safe: only one conversion runs at a time per process.
     """
-    if pdf_path in _docling_doc_cache:
-        # Move to end (most-recently-used)
-        _docling_doc_cache.move_to_end(pdf_path)
-        return _docling_doc_cache[pdf_path]
+    # Fast path: already cached (check without lock first)
+    with _docling_cache_lock:
+        if pdf_path in _docling_doc_cache:
+            _docling_doc_cache.move_to_end(pdf_path)
+            return _docling_doc_cache[pdf_path]
 
-    try:
-        pipeline_opts = PdfPipelineOptions(
-            do_table_structure=True,
-            do_ocr=False,  # OCR not needed for classification
-        )
-        converter = DocumentConverter(
-            allowed_formats=[InputFormat.PDF],
-            format_options={
-                InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_opts),
-            },
-        )
-        conv_result = converter.convert(pdf_path)
-        doc = conv_result.document
+        # Cache miss — convert inside the lock so only one thread converts
+        try:
+            pipeline_opts = PdfPipelineOptions(
+                do_table_structure=True,
+                do_ocr=False,  # OCR not needed for classification
+            )
+            converter = DocumentConverter(
+                allowed_formats=[InputFormat.PDF],
+                format_options={
+                    InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_opts),
+                },
+            )
+            # Run conversion in a separate thread with a timeout to prevent
+            # hanging on complex engineering PDFs.
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(converter.convert, pdf_path)
+                try:
+                    conv_result = future.result(timeout=_DOCLING_TIMEOUT)
+                except FuturesTimeoutError:
+                    logger.warning(
+                        "Docling conversion timed out after %ds for %s",
+                        _DOCLING_TIMEOUT, pdf_path,
+                    )
+                    future.cancel()
+                    _docling_doc_cache[pdf_path] = None
+                    return None
+            doc = conv_result.document
 
-        # Evict oldest entry when at capacity
-        if len(_docling_doc_cache) >= _DOCLING_CACHE_MAXSIZE:
-            evicted_key, _ = _docling_doc_cache.popitem(last=False)
-            logger.debug("Docling cache evicted: %s", evicted_key)
+            # Evict oldest entry when at capacity
+            if len(_docling_doc_cache) >= _DOCLING_CACHE_MAXSIZE:
+                evicted_key, _ = _docling_doc_cache.popitem(last=False)
+                logger.debug("Docling cache evicted: %s", evicted_key)
 
-        _docling_doc_cache[pdf_path] = doc
-        return doc
-    except Exception as exc:
-        logger.warning("Docling conversion failed for %s: %s", pdf_path, exc)
-        _docling_doc_cache[pdf_path] = None
-        return None
+            _docling_doc_cache[pdf_path] = doc
+            return doc
+        except Exception as exc:
+            logger.warning("Docling conversion failed for %s: %s", pdf_path, exc)
+            _docling_doc_cache[pdf_path] = None
+            return None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -671,11 +689,11 @@ def _classify_page(
     if title_block:
         tb_type = _infer_type_from_title_block(title_block)
 
-    # Try Docling fallback if fitz didn't yield a match
-    if tb_type is None:
-        tb_docling = _extract_title_block_docling(pdf_path, page_num - 1)
-        if tb_docling:
-            tb_type = _infer_type_from_title_block(tb_docling)
+    # NOTE: Docling fallback is intentionally omitted here.
+    # All title blocks (fitz + Docling) are pre-computed in classify_all_pages
+    # Step 2b before this function is called, so title_block already contains
+    # the best available text. Calling Docling per-page inside a thread pool
+    # would trigger redundant 30s+ conversions.
 
     if tb_type is not None:
         logger.debug("P%d → title-block → %s", page_num, tb_type.value)
@@ -756,9 +774,35 @@ def classify_all_pages(
     except Exception as exc:
         logger.error("Title-block extraction failed: %s", exc)
 
+    # Step 2b — Pre-warm Docling title blocks for pages fitz couldn't read.
+    # Done ONCE here (single-threaded) so workers never call Docling themselves,
+    # eliminating duplicate 30s+ conversions inside the thread pool.
+    pages_needing_docling = [pn for pn in range(1, total_pages + 1)
+                             if not title_blocks.get(pn)
+                             or not _infer_type_from_title_block(title_blocks.get(pn, ""))]
+    if pages_needing_docling:
+        logger.info(
+            "Pre-computing Docling title blocks for %d/%d pages...",
+            len(pages_needing_docling), total_pages,
+        )
+        t0 = __import__('time').time()
+        for pn in pages_needing_docling:
+            docling_tb = _extract_title_block_docling(pdf_path, pn - 1)
+            if docling_tb and not title_blocks.get(pn):
+                title_blocks[pn] = docling_tb
+                code = _extract_sheet_code(docling_tb)
+                if code and pn not in sheet_codes:
+                    sheet_codes[pn] = code
+        logger.info(
+            "Docling title-block pre-computation done in %.1fs",
+            __import__('time').time() - t0,
+        )
+
     # Step 3 — Classify each page through the priority chain ───────────────
     # Use a thread pool for parallel classification — each page goes through
     # the four-priority chain independently.
+    # NOTE: Workers no longer call Docling (pre-warmed above), so the thread
+    # pool is now purely CPU-bound text analysis — very fast.
     from config import CLASSIFICATION_WORKERS
     workers = min(CLASSIFICATION_WORKERS, total_pages)
     results: Dict[int, Dict[str, Any]] = {}

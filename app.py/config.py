@@ -77,7 +77,7 @@ VLM_MAX_CONCURRENT: int = int(os.getenv("VLM_MAX_CONCURRENT", "3"))  # concurren
 AWS_ACCESS_KEY_ID: str = os.getenv("AWS_ACCESS_KEY_ID", "")
 AWS_SECRET_ACCESS_KEY: str = os.getenv("AWS_SECRET_ACCESS_KEY", "")
 AWS_REGION_NAME: str = os.getenv("AWS_REGION_NAME", "us-east-1")
-S3_BUCKET_NAME: str = os.getenv("S3_BUCKET_NAME", "dhatri-cds")
+S3_BUCKET_NAME: str = os.getenv("S3_BUCKET_NAME", "cds-vision")
 # Database connection pool
 DB_POOL_SIZE: int = int(os.getenv("DB_POOL_SIZE", "10"))
 DB_MAX_OVERFLOW: int = int(os.getenv("DB_MAX_OVERFLOW", "20"))
@@ -91,6 +91,11 @@ GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
 
 # Anthropic API (used by table_extractor VLM fixture extraction)
 ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
+
+# AWS Textract for Table Extraction
+# Uses AWS Textract for table extraction (replaces Docling table extraction)
+# Textract provides superior table structure recognition for complex schedules
+USE_AWS_TEXTRACT_FOR_TABLES: bool = os.getenv("USE_AWS_TEXTRACT_FOR_TABLES", "true").lower() == "true"
 
 # CORS
 CORS_ORIGINS: list = os.getenv("CORS_ORIGINS", "*").split(",")

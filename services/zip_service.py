@@ -16,6 +16,7 @@ import os
 import zipfile
 from typing import List
 
+import fitz  # PyMuPDF
 from fastapi import HTTPException, status
 
 
@@ -97,3 +98,45 @@ class ZipService:
             )
 
         return pdf_files
+
+    @staticmethod
+    def merge_pdfs(pdf_paths: List[str], output_path: str) -> int:
+        """
+        Merge a list of PDF files into a single PDF saved at *output_path*.
+
+        Returns the total page count of the merged document.
+
+        Raises:
+            HTTPException 400  — no valid PDFs could be merged
+            HTTPException 500  — unexpected failure during merging
+        """
+        try:
+            merged = fitz.open()
+            pages_added = 0
+            for pdf_path in pdf_paths:
+                try:
+                    src = fitz.open(pdf_path)
+                    merged.insert_pdf(src)
+                    pages_added += len(src)
+                    src.close()
+                except Exception:
+                    continue  # skip unreadable PDFs, try the rest
+
+            if pages_added == 0:
+                merged.close()
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="None of the PDFs inside the ZIP could be read",
+                )
+
+            merged.save(output_path)
+            merged.close()
+            return pages_added
+
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to merge PDFs from ZIP",
+            )

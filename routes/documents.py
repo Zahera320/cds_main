@@ -115,23 +115,38 @@ async def upload_file(
     status_msg = "uploaded"
 
     # ── ZIP handling ──────────────────────────────────────────────────────
-    # When a ZIP is uploaded, extract its PDFs and create SEPARATE Document
-    # records for each, all sharing the same batch_id.  The original ZIP
-    # record acts as a parent/placeholder with status='completed'.
+    # All PDFs inside the ZIP are merged into a single PDF and processed as
+    # one unified document — pages are numbered continuously across all PDFs.
     if ext == ".zip":
-        batch_id = str(uuid.uuid4())
+        import shutil
+        temp_extract_dir = os.path.join(original_dir, "_zip_extract")
+        os.makedirs(temp_extract_dir, exist_ok=True)
+
         try:
-            pdf_files = ZipService.extract_pdfs(file_path, original_dir)
+            pdf_files = ZipService.extract_pdfs(file_path, temp_extract_dir)
             if not pdf_files:
+                shutil.rmtree(temp_extract_dir, ignore_errors=True)
                 StorageService.cleanup_document_dir(current_user.id, document_id)
                 raise HTTPException(status_code=400, detail="ZIP file contains no PDF files")
         except HTTPException:
             raise
         except Exception:
+            shutil.rmtree(temp_extract_dir, ignore_errors=True)
             StorageService.cleanup_document_dir(current_user.id, document_id)
             raise HTTPException(status_code=500, detail="Failed to extract ZIP file")
 
-        # Save ZIP record as completed (parent placeholder)
+        # Merge all extracted PDFs into one single PDF
+        merged_pdf_path = os.path.join(original_dir, "merged_from_zip.pdf")
+        try:
+            ZipService.merge_pdfs(pdf_files, merged_pdf_path)
+        except HTTPException:
+            shutil.rmtree(temp_extract_dir, ignore_errors=True)
+            StorageService.cleanup_document_dir(current_user.id, document_id)
+            raise
+        finally:
+            shutil.rmtree(temp_extract_dir, ignore_errors=True)
+
+        # Save a single document record for the merged PDF
         try:
             document = DocumentService.create_document(
                 db,
@@ -142,62 +157,29 @@ async def upload_file(
                 content_hash=content_hash,
                 owner_id=current_user.id,
                 upload_time=datetime.now(timezone.utc).replace(tzinfo=None),
-                status="completed",
-                batch_id=batch_id,
+                status="uploaded",
             )
         except Exception:
             db.rollback()
             StorageService.cleanup_document_dir(current_user.id, document_id)
             raise HTTPException(status_code=500, detail="Failed to save document metadata")
 
-        # Create a separate Document for each extracted PDF
-        child_doc_ids = []
-        for pdf_path_on_disk in pdf_files:
-            child_doc_id = str(uuid.uuid4())
-            child_filename = os.path.basename(pdf_path_on_disk)
-            # Move the extracted PDF into its own document directory
-            child_original_dir = StorageService.original_dir(current_user.id, child_doc_id)
-            import shutil
-            dest = os.path.join(child_original_dir, child_filename)
-            shutil.move(pdf_path_on_disk, dest)
-
-            child_size = os.path.getsize(dest)
-            with open(dest, "rb") as fh:
-                child_hash = hashlib.sha256(fh.read()).hexdigest()
-
-            try:
-                child_doc = DocumentService.create_document(
-                    db,
-                    document_id=child_doc_id,
-                    filename=child_filename,
-                    file_type="pdf",
-                    file_size=child_size,
-                    content_hash=child_hash,
-                    owner_id=current_user.id,
-                    upload_time=datetime.now(timezone.utc).replace(tzinfo=None),
-                    status="uploaded",
-                    batch_id=batch_id,
-                )
-                background_tasks.add_task(
-                    process_document_pages,
-                    document_id=child_doc_id,
-                    user_id=current_user.id,
-                )
-                DocumentService.update_status(db, child_doc, "processing")
-                child_doc_ids.append(child_doc_id)
-            except Exception:
-                db.rollback()
-                logger.error("Failed to create child doc for %s", child_filename)
+        # Process the merged PDF as a single document
+        background_tasks.add_task(
+            process_document_pages,
+            document_id=document_id,
+            user_id=current_user.id,
+        )
+        DocumentService.update_status(db, document, "processing")
 
         return schemas.UploadResponse(
             document_id=document_id,
             filename=file.filename,
             file_type="zip",
             file_size=len(contents),
-            status="completed",
-            batch_id=batch_id,
-            extracted_pdf_count=len(child_doc_ids),
-            message=f"ZIP uploaded — {len(child_doc_ids)} PDFs extracted into batch {batch_id}",
+            status="processing",
+            extracted_pdf_count=len(pdf_files),
+            message=f"ZIP uploaded — {len(pdf_files)} PDFs merged into a single document",
         )
 
     # ── Save DB record ────────────────────────────────────────────────────
@@ -303,7 +285,8 @@ async def upload_multiple_files(
                 continue
 
             if ext == ".zip":
-                # ── ZIP in multi-upload: extract child PDFs ───────────────
+                # ── ZIP in multi-upload: merge all PDFs into single document ──
+                import shutil as _shutil
                 zip_doc_id = str(uuid.uuid4())
                 safe_name = StorageService.sanitize_filename(file.filename)
                 try:
@@ -314,22 +297,41 @@ async def upload_multiple_files(
                     failed_count += 1
                     continue
 
+                temp_extract_dir = os.path.join(zip_original_dir, "_zip_extract")
+                os.makedirs(temp_extract_dir, exist_ok=True)
                 try:
-                    pdf_files = ZipService.extract_pdfs(zip_path, zip_original_dir)
+                    pdf_files = ZipService.extract_pdfs(zip_path, temp_extract_dir)
                     if not pdf_files:
+                        _shutil.rmtree(temp_extract_dir, ignore_errors=True)
                         StorageService.cleanup_document_dir(current_user.id, zip_doc_id)
                         errors.append({"filename": file.filename, "error": "ZIP contains no PDFs"})
                         failed_count += 1
                         continue
                 except Exception:
+                    _shutil.rmtree(temp_extract_dir, ignore_errors=True)
                     StorageService.cleanup_document_dir(current_user.id, zip_doc_id)
                     errors.append({"filename": file.filename, "error": "Failed to extract ZIP"})
                     failed_count += 1
                     continue
 
-                # ZIP parent record
+                # Merge all extracted PDFs into one single PDF
+                merged_pdf_path = os.path.join(zip_original_dir, "merged_from_zip.pdf")
+                merge_ok = True
                 try:
-                    DocumentService.create_document(
+                    ZipService.merge_pdfs(pdf_files, merged_pdf_path)
+                except Exception:
+                    merge_ok = False
+                    StorageService.cleanup_document_dir(current_user.id, zip_doc_id)
+                    errors.append({"filename": file.filename, "error": "Failed to merge ZIP PDFs"})
+                    failed_count += 1
+                finally:
+                    _shutil.rmtree(temp_extract_dir, ignore_errors=True)
+                if not merge_ok:
+                    continue
+
+                # Single document record for the merged PDF
+                try:
+                    zip_doc = DocumentService.create_document(
                         db,
                         document_id=zip_doc_id,
                         filename=file.filename,
@@ -338,55 +340,29 @@ async def upload_multiple_files(
                         content_hash=content_hash,
                         owner_id=current_user.id,
                         upload_time=datetime.now(timezone.utc).replace(tzinfo=None),
-                        status="completed",
+                        status="uploaded",
                         batch_id=batch_id,
                     )
+                    background_tasks.add_task(
+                        process_document_pages,
+                        document_id=zip_doc_id,
+                        user_id=current_user.id,
+                    )
+                    DocumentService.update_status(db, zip_doc, "processing")
+                    results.append(schemas.UploadResponse(
+                        document_id=zip_doc_id,
+                        filename=file.filename,
+                        file_type="zip",
+                        file_size=len(contents),
+                        status="processing",
+                        batch_id=batch_id,
+                        extracted_pdf_count=len(pdf_files),
+                        message=f"{len(pdf_files)} PDFs merged into single document",
+                    ))
+                    succeeded += 1
                 except Exception:
                     db.rollback()
-                    continue
-
-                import shutil as _shutil
-                for pdf_on_disk in pdf_files:
-                    child_doc_id = str(uuid.uuid4())
-                    child_filename = os.path.basename(pdf_on_disk)
-                    child_dir = StorageService.original_dir(current_user.id, child_doc_id)
-                    dest = os.path.join(child_dir, child_filename)
-                    _shutil.move(pdf_on_disk, dest)
-                    child_size = os.path.getsize(dest)
-                    with open(dest, "rb") as fh:
-                        child_hash = hashlib.sha256(fh.read()).hexdigest()
-                    try:
-                        child_doc = DocumentService.create_document(
-                            db,
-                            document_id=child_doc_id,
-                            filename=child_filename,
-                            file_type="pdf",
-                            file_size=child_size,
-                            content_hash=child_hash,
-                            owner_id=current_user.id,
-                            upload_time=datetime.now(timezone.utc).replace(tzinfo=None),
-                            status="uploaded",
-                            batch_id=batch_id,
-                        )
-                        background_tasks.add_task(
-                            process_document_pages,
-                            document_id=child_doc_id,
-                            user_id=current_user.id,
-                        )
-                        DocumentService.update_status(db, child_doc, "processing")
-                        results.append(schemas.UploadResponse(
-                            document_id=child_doc_id,
-                            filename=child_filename,
-                            file_type="pdf",
-                            file_size=child_size,
-                            status="processing",
-                            batch_id=batch_id,
-                            message=f"Extracted from {file.filename}",
-                        ))
-                        succeeded += 1
-                    except Exception:
-                        db.rollback()
-                        logger.error("Failed to create child doc for %s", child_filename)
+                    logger.error("Failed to create doc for ZIP %s", file.filename)
 
             else:
                 # ── Direct PDF in multi-upload ────────────────────────────

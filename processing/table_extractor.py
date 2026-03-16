@@ -22,15 +22,12 @@ Public API:
 import base64
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Optional, Tuple
 
 import fitz  # PyMuPDF
-
-from docling.document_converter import DocumentConverter, PdfFormatOption
-from docling.datamodel.pipeline_options import PdfPipelineOptions
-from docling.datamodel.base_models import InputFormat
 
 logger = logging.getLogger(__name__)
 
@@ -303,8 +300,65 @@ def _docling_tables_for_pages(
     return dict(tables_by_page)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  Layer 3 — Table Filtering
+def _aws_textract_tables_for_pages(
+    pdf_path: str,
+    page_numbers: List[int],
+) -> Dict[int, List[list]]:
+    """
+    Layer 1 Alternative: Use AWS Textract to extract tables from specified pages.
+
+    Returns {page_number: [cleaned_2d_grid, ...]}.
+
+    AWS Textract provides superior table structure recognition for complex
+    lighting fixture schedules and panel layouts.
+    """
+    from collections import defaultdict
+    from processing.aws_textract_extractor import TextractTableExtractor
+    import tempfile
+
+    page_set = set(page_numbers)
+    tables_by_page: Dict[int, List[list]] = defaultdict(list)
+
+    try:
+        # Create temporary directory for Textract output
+        import tempfile
+        with tempfile.TemporaryDirectory() as temp_dir:
+            logger.info("AWS Textract: extracting tables from %d pages", len(page_numbers))
+            extractor = TextractTableExtractor(pdf_path, temp_dir)
+            result = extractor.run()
+
+            # Load tables from JSON
+            if result.tables_json_path and os.path.isfile(result.tables_json_path):
+                try:
+                    with open(result.tables_json_path, "r", encoding="utf-8") as f:
+                        all_tables = json.load(f)
+
+                    for tbl_entry in all_tables:
+                        page_no = tbl_entry.get("page_number", 0)
+                        if page_no not in page_set:
+                            continue
+
+                        rows = tbl_entry.get("rows", [])
+                        cleaned = [
+                            [str(c).strip() if c is not None else "" for c in row]
+                            for row in rows
+                        ]
+                        if not _is_empty_table(cleaned) and len(cleaned) >= 2:
+                            tables_by_page[page_no].append(cleaned)
+
+                    logger.info(
+                        "AWS Textract: extracted %d tables from %d pages",
+                        sum(len(v) for v in tables_by_page.values()),
+                        len(tables_by_page),
+                    )
+                except Exception as exc:
+                    logger.error("Failed to parse Textract JSON output: %s", exc)
+
+    except Exception as exc:
+        logger.error("AWS Textract extraction failed: %s", exc)
+
+    return dict(tables_by_page)
+
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _classify_table(table: list) -> str:
@@ -1206,24 +1260,27 @@ def extract_fixtures_from_pages(
     page_numbers: List[int],
     plan_codes: Optional[List[str]] = None,
     use_vlm_fallback: bool = True,
+    use_aws_textract: bool = True,
 ) -> List[FixtureRecord]:
     """
-    Run Layers 1-6 on a set of pages using Docling for table extraction.
+    Run Layers 1-6 on a set of pages using AWS Textract.
 
     Args:
         pdf_path: Path to the source PDF.
         page_numbers: 1-based page numbers to extract from.
         plan_codes: Fixture codes found on plan pages (for VLM hints).
-        use_vlm_fallback: Whether to try VLM if Docling finds nothing.
+        use_vlm_fallback: Whether to try VLM if table extraction finds nothing.
+        use_aws_textract: Whether to use AWS Textract for Layer 1 (default: True).
 
     Returns combined list of FixtureRecords from all pages.
     """
     all_fixtures: List[FixtureRecord] = []
 
     try:
-        tables_by_page = _docling_tables_for_pages(pdf_path, page_numbers)
+        logger.info("Using AWS Textract for table extraction Layer 1")
+        tables_by_page = _aws_textract_tables_for_pages(pdf_path, page_numbers)
     except Exception as exc:
-        logger.error("Docling table extraction failed for %s: %s", pdf_path, exc)
+        logger.error("Layer 1 table extraction failed for %s: %s", pdf_path, exc)
         return all_fixtures
 
     for pn in page_numbers:
@@ -1270,7 +1327,7 @@ def extract_fixtures(
     # Layer 7: VLM fallback if Docling extracted nothing
     if not fixtures and use_vlm_fallback and schedule_pages:
         logger.info(
-            "No fixtures from Docling on %d schedule pages — trying VLM fallback",
+            "No fixtures from Textract on %d schedule pages — trying VLM fallback",
             len(schedule_pages),
         )
         for pn in schedule_pages:
