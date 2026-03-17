@@ -195,3 +195,24 @@ class BatchDocumentsResponse(BaseModel):
     total: int
     all_completed: bool
     documents: List[DocumentResponse]
+
+
+# ── Key Notes ──────────────────────────────────────────────────────────
+class KeynoteItem(BaseModel):
+    """A single extracted note."""
+    number: str
+    text: str
+    section: str
+
+class PageKeynotes(BaseModel):
+    """Notes extracted from a single page."""
+    page_number: int
+    sheet_code: Optional[str] = None
+    page_type: str
+    notes: List[KeynoteItem]
+
+class KeynotesResponse(BaseModel):
+    """Response for key notes extraction."""
+    document_id: str
+    total_notes: int
+    pages: List[PageKeynotes]

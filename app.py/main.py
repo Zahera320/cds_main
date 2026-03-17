@@ -26,6 +26,7 @@ from routes import classification, processing as processing_routes, tables, fixt
 from routes.takeoff import batch_takeoff_router
 from routes import pdf_render
 from routes import img_render
+from routes import keynotes
 from processing.vlm_classifier import is_vlm_available
 
 logger = logging.getLogger(__name__)
@@ -173,6 +174,7 @@ app.include_router(batch_takeoff_router)
 app.include_router(page_image_router)
 app.include_router(pdf_render.router)
 app.include_router(img_render.router)
+app.include_router(keynotes.router)
 
 # Serve frontend
 static_dir = os.path.join(os.path.dirname(__file__), "static")

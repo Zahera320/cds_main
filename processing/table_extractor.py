@@ -269,7 +269,7 @@ def _docling_tables_for_pages(
 
     pipeline_opts = PdfPipelineOptions(
         do_table_structure=True,
-        do_ocr=True,
+        do_ocr=False,
     )
     converter = DocumentConverter(
         allowed_formats=[InputFormat.PDF],

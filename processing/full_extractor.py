@@ -48,16 +48,8 @@ class DocumentExtractor:
         # Convert with Docling
         pipeline_opts = PdfPipelineOptions(
             do_table_structure=True,
-            do_ocr=True,
+            do_ocr=False,
         )
-        converter = DocumentConverter(
-            allowed_formats=[InputFormat.PDF],
-            format_options={
-                InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_opts),
-            },
-        )
-        conv_result = converter.convert(str(self.pdf_path))
-        doc = conv_result.document
         num_pages = doc.num_pages()
 
         # Group text items by page number

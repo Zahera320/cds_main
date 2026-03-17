@@ -820,6 +820,40 @@ Re-runs the cross-document batch takeoff pipeline. All documents in the batch mu
 | 35 | `GET`    | `/batch/{batch_id}/takeoff/schedule-csv`              | JWT  | Batch Schedule CSV |
 | 36 | `GET`    | `/batch/{batch_id}/takeoff/split-pdf`                 | JWT  | Batch Split PDF |
 | 37 | `POST`   | `/batch/{batch_id}/takeoff/rerun`                     | JWT  | Re-run Batch Takeoff |
+| 38 | `GET`    | `/documents/{document_id}/keynotes`                   | JWT  | Extract Key Notes |
+
+---
+
+### Key Notes
+
+**`GET /documents/{document_id}/keynotes`**
+
+Extracts KEY NOTES, GENERAL NOTES, ELECTRICAL NOTES, and LIGHTING NOTES
+from the extracted text of document pages.
+
+**Query Parameters:**
+| Parameter   | Default    | Description |
+|-------------|------------|-------------|
+| `relevance` | `relevant` | `relevant` = only relevant pages, `all` = all pages |
+
+**Response:**
+```json
+{
+  "document_id": "uuid",
+  "total_notes": 12,
+  "pages": [
+    {
+      "page_number": 4,
+      "sheet_code": "E1.01",
+      "page_type": "LIGHTING_PLAN",
+      "notes": [
+        {"number": "1", "text": "...", "section": "KEY NOTES"},
+        {"number": "A", "text": "...", "section": "GENERAL NOTES"}
+      ]
+    }
+  ]
+}
+```
 
 ---
 

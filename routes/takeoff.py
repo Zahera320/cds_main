@@ -425,28 +425,29 @@ def rerun_takeoff_pipeline(
             raise HTTPException(status_code=404, detail="Document not found or access denied")
 
         if document.file_type == "zip":
-            if not document.batch_id:
-                raise HTTPException(status_code=400, detail="ZIP document has no batch")
-            from processing.document_processor import run_batch_autocount_pipeline
-            uid = current_user.id
-            doc_batch_id = document.batch_id
+            if document.batch_id:
+                # ZIP uploaded as part of a batch — rerun batch pipeline
+                from processing.document_processor import run_batch_autocount_pipeline
+                uid = current_user.id
+                doc_batch_id = document.batch_id
 
-            def _rerun_zip_batch():
-                batch_dir = _batch_pipeline_dir_for_user(uid, doc_batch_id)
-                os.makedirs(batch_dir, exist_ok=True)
-                batch_flag = os.path.join(batch_dir, "_running")
-                try:
-                    with open(batch_flag, "w") as f:
-                        f.write("running")
-                    run_batch_autocount_pipeline(doc_batch_id, uid)
-                except Exception as exc:
-                    logger.error("Batch pipeline rerun from ZIP failed for %s: %s", doc_batch_id, exc)
-                finally:
-                    if os.path.isfile(batch_flag):
-                        os.remove(batch_flag)
+                def _rerun_zip_batch():
+                    batch_dir = _batch_pipeline_dir_for_user(uid, doc_batch_id)
+                    os.makedirs(batch_dir, exist_ok=True)
+                    batch_flag = os.path.join(batch_dir, "_running")
+                    try:
+                        with open(batch_flag, "w") as f:
+                            f.write("running")
+                        run_batch_autocount_pipeline(doc_batch_id, uid)
+                    except Exception as exc:
+                        logger.error("Batch pipeline rerun from ZIP failed for %s: %s", doc_batch_id, exc)
+                    finally:
+                        if os.path.isfile(batch_flag):
+                            os.remove(batch_flag)
 
-            background_tasks.add_task(_rerun_zip_batch)
-            return {"document_id": document_id, "batch_id": doc_batch_id, "message": "Batch takeoff pipeline rerun started"}
+                background_tasks.add_task(_rerun_zip_batch)
+                return {"document_id": document_id, "batch_id": doc_batch_id, "message": "Batch takeoff pipeline rerun started"}
+            # else: ZIP uploaded as single file (merged_from_zip.pdf) — fall through to regular pipeline
 
         if document.status not in ("completed", "failed"):
             raise HTTPException(status_code=400, detail="Document must be processed first")

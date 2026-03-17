@@ -108,11 +108,18 @@ class DoclingExtractor:
             lighting_schedule.csv     (if Light Fixture Schedule found)
     """
 
-    def __init__(self, pdf_path: str, output_dir: str, use_aws_textract: bool = True):
+    def __init__(
+        self,
+        pdf_path: str,
+        output_dir: str,
+        use_aws_textract: bool = True,
+        schedule_page_numbers: Optional[List[int]] = None,
+    ):
         self.pdf_path = Path(pdf_path)
         self.output_dir = Path(output_dir)
         # Always use AWS Textract for table extraction
         self.use_aws_textract = True
+        self.schedule_page_numbers = schedule_page_numbers
 
     # ------------------------------------------------------------------
     #  Main entry point
@@ -138,7 +145,7 @@ class DoclingExtractor:
         # Docling handles text + images only; table extraction uses AWS Textract
         pipeline_opts = PdfPipelineOptions(
             do_table_structure=False,
-            do_ocr=True,
+            do_ocr=False,  # Text extracted via PDF parser; Textract handles tables
             generate_page_images=True,
             generate_picture_images=False,  # not used downstream, skip to save RAM
             images_scale=1.5,              # reduced from 2.0; still high quality
@@ -171,7 +178,7 @@ class DoclingExtractor:
         try:
             from processing.aws_textract_extractor import TextractTableExtractor
             logger.info("AWS Textract: extracting tables from %s", self.pdf_path.name)
-            textract_extractor = TextractTableExtractor(str(self.pdf_path), str(self.output_dir))
+            textract_extractor = TextractTableExtractor(str(self.pdf_path), str(self.output_dir), page_numbers=self.schedule_page_numbers)
             textract_result = textract_extractor.run()
 
             result.table_count = textract_result.table_count

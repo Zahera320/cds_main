@@ -37,7 +37,7 @@ from docling.datamodel.base_models import InputFormat
 logger = logging.getLogger(__name__)
 
 # Timeout in seconds for Docling operations on complex PDFs.
-_DOCLING_TIMEOUT = 60
+_DOCLING_TIMEOUT = 180
 
 # Cache: avoids re-converting the same PDF within a single classification call.
 # Capped at 2 entries (LRU-style) so it never grows unboundedly across requests.
@@ -463,18 +463,23 @@ def _get_docling_doc(pdf_path: str):
             )
             # Run conversion in a separate thread with a timeout to prevent
             # hanging on complex engineering PDFs.
-            with ThreadPoolExecutor(max_workers=1) as pool:
-                future = pool.submit(converter.convert, pdf_path)
-                try:
-                    conv_result = future.result(timeout=_DOCLING_TIMEOUT)
-                except FuturesTimeoutError:
-                    logger.warning(
-                        "Docling conversion timed out after %ds for %s",
-                        _DOCLING_TIMEOUT, pdf_path,
-                    )
-                    future.cancel()
-                    _docling_doc_cache[pdf_path] = None
-                    return None
+            # NOTE: We avoid `with ThreadPoolExecutor` because its __exit__
+            # calls shutdown(wait=True), which blocks until the Docling
+            # thread finishes — defeating the timeout entirely.
+            pool = ThreadPoolExecutor(max_workers=1)
+            future = pool.submit(converter.convert, pdf_path)
+            try:
+                conv_result = future.result(timeout=_DOCLING_TIMEOUT)
+            except FuturesTimeoutError:
+                logger.warning(
+                    "Docling conversion timed out after %ds for %s",
+                    _DOCLING_TIMEOUT, pdf_path,
+                )
+                future.cancel()
+                pool.shutdown(wait=False)
+                _docling_doc_cache[pdf_path] = None
+                return None
+            pool.shutdown(wait=False)
             doc = conv_result.document
 
             # Evict oldest entry when at capacity
