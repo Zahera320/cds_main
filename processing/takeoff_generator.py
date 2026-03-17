@@ -462,6 +462,351 @@
 
 
 
+# import json
+# import logging
+# import os
+# import re
+# from concurrent.futures import ThreadPoolExecutor, as_completed
+# from pathlib import Path
+
+# import fitz  # PyMuPDF
+# import pandas as pd
+
+# logger = logging.getLogger(__name__)
+
+# def _rects_overlap(a: fitz.Rect, b: fitz.Rect, tolerance: float = 2.0) -> bool:
+#     return not (a.x1 + tolerance < b.x0 or b.x1 + tolerance < a.x0 or a.y1 + tolerance < b.y0 or b.y1 + tolerance < a.y0)
+
+
+# def _process_page_task(args):
+#     """
+#     Worker function — processes a single PDF page in a thread.
+#     Each thread opens its own fitz.Document handle, performs fixture search, 
+#     draws overlays, renders the page to a PNG at 200 DPI, and returns counts
+#     AND exact bounding box coordinates.
+#     """
+#     pdf_path, page_num, fixture_types_sorted, overlay_dir = args
+
+#     doc = fitz.open(str(pdf_path))
+#     page = doc[page_num]
+
+#     # Get ALL words on the page immediately. 
+#     # words format: (x0, y0, x1, y1, "word", block_no, line_no, word_no)
+#     words = page.get_text("words")
+
+#     # 1. SMART SHEET ID EXTRACTION (Geometry-Based)
+#     sheet_id = f"Page_{page_num + 1}"
+#     potential_sheets = []
+    
+#     # Regex for standard architectural sheet numbers (e.g., E101, ED-2.1, L300)
+#     sheet_regex = re.compile(r'^[A-Z]{1,3}[-]?\d{1,4}(?:\.\d{1,3})?[A-Z]?$', re.IGNORECASE)
+    
+#     # Bottom-right corner coordinates of the page
+#     x_max = page.rect.x1
+#     y_max = page.rect.y1
+
+#     for w in words:
+#         text_val = w[4].strip()
+#         # Remove trailing punctuation (like E101. -> E101)
+#         text_val = re.sub(r'^[.,;:!]+|[.,;:!]+$', '', text_val)
+        
+#         # If it matches the sheet pattern AND is not a fixture code
+#         if sheet_regex.match(text_val) and text_val not in fixture_types_sorted:
+#             # Prioritize standard electrical/lighting prefixes
+#             is_priority = bool(re.match(r'^(E|ED|EL|EP|L|LT|A|P|M)\d', text_val, re.IGNORECASE))
+            
+#             # Save: (Text, x0, y0, Is_Priority)
+#             potential_sheets.append((text_val, w[0], w[1], is_priority))
+                
+#     if potential_sheets:
+#         # Sort candidates! 
+#         # 1st criteria: Priority (True comes before False)
+#         # 2nd criteria: Distance to bottom-right corner (Smallest distance first)
+#         potential_sheets.sort(key=lambda item: (
+#             not item[3], 
+#             (x_max - item[1])**2 + (y_max - item[2])**2 
+#         ))
+        
+#         sheet_id = potential_sheets[0][0]
+        
+#     print(f"\n--- PAGE {page_num + 1} SHEET EXTRACTION ---")
+#     print(f"Top 3 Candidates closest to bottom-right: {[p[0] for p in potential_sheets[:3]]}")
+#     print(f"FINAL SELECTED SHEET ID: {sheet_id}")
+#     print("------------------------------------------\n")
+
+#     page_matched_rects = []
+#     page_fixture_counts = {t: 0 for t in fixture_types_sorted}
+#     page_fixture_instances = []  # NEW: List to store bounding box geometry
+
+#     for fixture in fixture_types_sorted:
+#         candidates = page.search_for(fixture)
+#         if not candidates:
+#             continue
+            
+#         for inst in candidates:
+#             # Skip regions already claimed by a longer fixture code
+#             if any(
+#                 not (inst.x1 + 2 < prev.x0 or prev.x1 + 2 < inst.x0 or
+#                      inst.y1 + 2 < prev.y0 or prev.y1 + 2 < inst.y0)
+#                 for prev in page_matched_rects
+#             ):
+#                 continue
+                
+#             is_exact = False
+#             for w in words:
+#                 wx0, wy0, wx1, wy1 = w[0], w[1], w[2], w[3]
+#                 # Check overlap
+#                 if not (inst.x1 + 1 < wx0 or wx1 + 1 < inst.x0 or
+#                         inst.y1 + 1 < wy0 or wy1 + 1 < inst.y0):
+                    
+#                     wclean = w[4].strip()
+#                     # Exact match OR fixture code followed by a slash/dash (e.g. A1/5)
+#                     if wclean == fixture or re.match(r'^' + re.escape(fixture) + r'(?:[/\-]\d+)?$', wclean):
+#                         is_exact = True
+#                         break
+            
+#             if is_exact:
+#                 page_fixture_counts[fixture] += 1
+#                 page_matched_rects.append(inst)
+
+#                 # NEW: Save the exact coordinates for the frontend (rounded to 2 decimals)
+#                 page_fixture_instances.append({
+#                     "id": f"{sheet_id}_{fixture}_{len(page_fixture_instances)}", # Unique ID for React
+#                     "type": fixture,
+#                     "x0": round(inst.x0, 2),
+#                     "y0": round(inst.y0, 2),
+#                     "x1": round(inst.x1, 2),
+#                     "y1": round(inst.y1, 2)
+#                 })
+                
+#                 # Draw a Red rectangle around the found text
+#                 page.draw_rect(inst, color=(1, 0, 0), width=1.5)
+                
+#                 # Add the label next to it
+#                 page.insert_text(
+#                     (inst.x1 + 2, inst.y0 + 5),
+#                     f"{fixture}",
+#                     color=(0, 0, 1),
+#                     fontsize=8,
+#                 )
+
+#     # Render annotated page at 200 DPI and save overlay PNG
+#     overlay_path = Path(overlay_dir) / f"overlay_{sheet_id}.png"
+#     page.get_pixmap(dpi=200).save(str(overlay_path))
+#     doc.close()
+
+#     # RETURN the newly collected instances along with everything else
+#     return page_num, sheet_id, page_fixture_counts, page_fixture_instances
+
+
+# class TakeoffGenerator:
+#     """
+#     Generates lighting takeoffs. 
+#     Outputs:
+#     - fixture_results/fixture_takeoff_matrix.csv
+#     - fixture_results/fixture_counts.json
+#     - fixture_results/fixture_instances.json  <-- NEW (for frontend interaction)
+#     - fixture_results/overlays/overlay_SHEET.png
+#     """
+#     def __init__(self, csv_path, pdf_path, output_dir, page_sheet_labels: dict = None):
+#         self.csv_path = Path(csv_path) if csv_path else None
+#         self.pdf_path = Path(pdf_path) if pdf_path else None
+        
+#         # Define the new directory structure
+#         self.base_output = Path(output_dir) / "fixture_results"
+#         self.overlay_dir = self.base_output / "overlays"
+        
+#         # Ensure directories exist
+#         self.overlay_dir.mkdir(parents=True, exist_ok=True)
+#         self.fixture_metadata = {}  # Stores {Code: Description}
+#         # Optional {split_page_idx: sheet_label} from PlanSplitter.
+#         # When provided, bypasses the bottom-right corner text detection.
+#         self.page_sheet_labels: dict = page_sheet_labels or {}
+
+#     def _read_fixture_data(self):
+#         """Read CSV: Clean empty columns, then map Code and Description."""
+#         import pandas as pd
+#         import re
+
+#         try:
+#             # 1. READ CSV: use keep_default_na=False so empty cells are "" instead of NaN floats
+#             df = pd.read_csv(self.csv_path, header=None, keep_default_na=False).astype(str)
+            
+#             # 2. DATA CLEANING: Remove completely empty columns caused by leading commas
+#             df = df.apply(lambda x: x.str.strip())
+#             df = df.loc[:, (df != '').any(axis=0)] # Drop columns where every value is ''
+            
+#             if df.empty or len(df.columns) == 0:
+#                 return []
+
+#             # Reset column indices after dropping the empty ones
+#             df.columns = range(df.columns.size)
+
+#             # 3. FORCE ASSUMPTION: The first non-empty column is ALWAYS the Fixture Code
+#             code_col = 0
+            
+#             # Find which column says "desc" in the first 3 rows
+#             desc_col = 1
+#             if len(df.columns) > 1:
+#                 for r_idx in range(min(3, len(df))):
+#                     row_vals = [str(c).lower() for c in df.iloc[r_idx].values]
+#                     try:
+#                         desc_col = next(i for i, cell in enumerate(row_vals) if "desc" in cell)
+#                         break  # Found it! Stop searching.
+#                     except StopIteration:
+#                         continue
+
+#             # 4. Extract the data
+#             for _, row in df.iterrows():
+#                 c = str(row.iloc[code_col]).strip()
+#                 d = str(row.iloc[desc_col]).strip() if len(row.values) > desc_col else "No Description"
+
+#                 # Docling edge-case: sometimes the last column repeats the pure code. 
+#                 last_val = str(row.iloc[-1]).strip()
+#                 sec_last_val = str(row.iloc[-2]).strip() if len(row.values) >= 2 else ""
+                
+#                 alt_code = last_val if last_val and last_val.lower() not in ['nan', ''] else sec_last_val
+                
+#                 if alt_code and len(alt_code) <= 6 and " " not in alt_code and (len(c) > 6 or " " in c):
+#                     c = alt_code
+
+#                 # Remove stray quotes
+#                 c = re.sub(r'^[\'"]+|[\'"]+$', '', c)
+#                 d = re.sub(r'^[\'"]+|[\'"]+$', '', d)
+
+#                 # 5. PDF Garbage Filter
+#                 bad_words = ['nan', '', 'type', 'mark', 'label', 'code', 'symbol', 'fixture', 'description', 'letter']
+#                 if c and c.lower() not in bad_words:
+#                     # A fixture code should never be a massive paragraph
+#                     if len(c) <= 15: 
+#                         self.fixture_metadata[c] = d if d else "No Description"
+
+#             # 6. HANDLE MERGED CELLS (e.g., "E3 E4" -> Splits into "E3" and "E4")
+#             final_fixtures = {}
+#             for code, desc in self.fixture_metadata.items():
+#                 if " " in code and len(code) <= 12:
+#                     for split_code in code.split():
+#                         final_fixtures[split_code.strip()] = desc
+#                 else:
+#                     final_fixtures[code] = desc
+            
+#             self.fixture_metadata = final_fixtures
+
+#             return list(self.fixture_metadata.keys())
+
+#         except Exception as e:
+#             print(f"Error reading CSV in TakeoffGenerator: {e}")
+#             logger.error("Error reading CSV in TakeoffGenerator: %s", e)
+#             return []
+
+#     def generate(self):
+#         print("\n--- Starting Takeoff Generator ---")
+#         if not self.csv_path or not self.csv_path.exists():
+#             print(f"❌ ERROR: Missing CSV file at {self.csv_path}")
+#             return False
+            
+#         if not self.pdf_path or not self.pdf_path.exists():
+#             print(f"❌ ERROR: Missing PDF file at {self.pdf_path}")
+#             return False
+
+#         fixture_types = self._read_fixture_data()
+#         print(f"✅ Found {len(fixture_types)} fixture types: {fixture_types}")
+        
+#         if not fixture_types:
+#             print("⚠️ WARNING: No fixture types found in CSV — skipping takeoff")
+#             return False
+
+#         # Open once just to get page count, then close
+#         tmp_doc = fitz.open(str(self.pdf_path))
+#         num_pages = len(tmp_doc)
+#         tmp_doc.close()
+
+#         # Sort longest-first to prevent 'A1' from matching inside 'AA1'
+#         fixture_types_sorted = sorted(fixture_types, key=len, reverse=True)
+
+#         tasks = [
+#             (str(self.pdf_path), page_num, fixture_types_sorted, str(self.overlay_dir))
+#             for page_num in range(num_pages)
+#         ]
+
+#         # Use one thread per CPU core (capped at the number of pages)
+#         max_workers = min(os.cpu_count() or 4, num_pages)
+#         print(f"🚀 Processing {num_pages} pages with {max_workers} threads...")
+
+#         results = []
+#         with ThreadPoolExecutor(max_workers=max_workers) as executor:
+#             future_to_page = {executor.submit(_process_page_task, task): task[1] for task in tasks}
+#             for future in as_completed(future_to_page):
+#                 page_num = future_to_page[future]
+#                 try:
+#                     results.append(future.result())
+#                 except Exception as exc:
+#                     print(f"❌ ERROR: Page {page_num} failed in takeoff worker: {exc}")
+
+#         # Sort by original page order
+#         results.sort(key=lambda r: r[0])
+
+#         # Aggregate per-page counts into the matrix
+#         matrix_counts = {t: {} for t in fixture_types}
+#         all_sheets = []
+#         all_instances = {}  # NEW: Store all bounding box coordinates
+        
+#         for _page_num, sheet_id, page_counts, page_instances in results:
+#             if sheet_id not in all_sheets:
+#                 all_sheets.append(sheet_id)
+                
+#             # Initialize or extend the list of instances for this sheet
+#             if sheet_id not in all_instances:
+#                 all_instances[sheet_id] = []
+#             all_instances[sheet_id].extend(page_instances)
+                
+#             for fixture, count in page_counts.items():
+#                 matrix_counts[fixture][sheet_id] = matrix_counts[fixture].get(sheet_id, 0) + count
+
+#         print("💾 Building matrix CSV and JSONs...")
+
+#         # --- EXPORT MATRIX CSV ---
+#         report_data = []
+#         for f_code in fixture_types:
+#             row = {"TYPE": f_code, "DESCRIPTION": self.fixture_metadata.get(f_code, "")}
+#             total = 0
+#             for s_id in all_sheets:
+#                 count = matrix_counts[f_code].get(s_id, 0)
+#                 row[s_id] = count
+#                 total += count
+#             row["TOTAL"] = total
+#             report_data.append(row)
+
+#         pd.DataFrame(report_data).to_csv(self.base_output / "fixture_takeoff_matrix.csv", index=False)
+
+#         # --- EXPORT COUNTS JSON ---
+#         with open(self.base_output / "fixture_counts.json", "w") as f:
+#             json.dump(matrix_counts, f, indent=4)
+            
+#         # --- EXPORT INSTANCES JSON (FRONTEND BOUNDING BOXES) ---
+#         with open(self.base_output / "fixture_instances.json", "w") as f:
+#             json.dump(all_instances, f, indent=4)
+
+#         print(f"✅ Takeoff complete! Total fixtures found: {sum(sum(v.values()) for v in matrix_counts.values())}")
+#         print(f"📁 Files saved in: {self.base_output}\n")
+#         return True
+
+
+# if __name__ == "__main__":
+#     # Standard paths for standalone testing
+#     BASE_OUT = "/home/ubuntu/project/cds_main/app.py/storage/4/56ce83bb-f5e5-450b-a599-5a8206c5d5a3/pipeline" 
+    
+#     generator = TakeoffGenerator(
+#         f"/home/ubuntu/project/cds_main/app.py/storage/4/56ce83bb-f5e5-450b-a599-5a8206c5d5a3/pipeline/lighting_schedule.csv", 
+#         f"/home/ubuntu/project/cds_main/app.py/storage/4/56ce83bb-f5e5-450b-a599-5a8206c5d5a3/pipeline/lighting_panel_plans.pdf", 
+#         BASE_OUT
+#     )
+#     generator.generate()
+
+
+
+
+
 import json
 import logging
 import os
@@ -475,7 +820,13 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 def _rects_overlap(a: fitz.Rect, b: fitz.Rect, tolerance: float = 2.0) -> bool:
-    return not (a.x1 + tolerance < b.x0 or b.x1 + tolerance < a.x0 or a.y1 + tolerance < b.y0 or b.y1 + tolerance < a.y0)
+    """Return True if two rectangles overlap (with a small tolerance)."""
+    return not (
+        a.x1 + tolerance < b.x0
+        or b.x1 + tolerance < a.x0
+        or a.y1 + tolerance < b.y0
+        or b.y1 + tolerance < a.y0
+    )
 
 
 def _process_page_task(args):
@@ -490,8 +841,7 @@ def _process_page_task(args):
     doc = fitz.open(str(pdf_path))
     page = doc[page_num]
 
-    # Get ALL words on the page immediately. 
-    # words format: (x0, y0, x1, y1, "word", block_no, line_no, word_no)
+    # Get ALL words on the page immediately for Sheet ID extraction
     words = page.get_text("words")
 
     # 1. SMART SHEET ID EXTRACTION (Geometry-Based)
@@ -507,27 +857,19 @@ def _process_page_task(args):
 
     for w in words:
         text_val = w[4].strip()
-        # Remove trailing punctuation (like E101. -> E101)
         text_val = re.sub(r'^[.,;:!]+|[.,;:!]+$', '', text_val)
         
-        # If it matches the sheet pattern AND is not a fixture code
         if sheet_regex.match(text_val) and text_val not in fixture_types_sorted:
-            # Prioritize standard electrical/lighting prefixes
             is_priority = bool(re.match(r'^(E|ED|EL|EP|L|LT|A|P|M)\d', text_val, re.IGNORECASE))
-            
-            # Save: (Text, x0, y0, Is_Priority)
             potential_sheets.append((text_val, w[0], w[1], is_priority))
                 
     if potential_sheets:
-        # Sort candidates! 
-        # 1st criteria: Priority (True comes before False)
-        # 2nd criteria: Distance to bottom-right corner (Smallest distance first)
+        # Sort candidates: Priority first, then closest to bottom-right corner
         potential_sheets.sort(key=lambda item: (
             not item[3], 
             (x_max - item[1])**2 + (y_max - item[2])**2 
         ))
-        
-        sheet_id = potential_sheets[0][0]
+        sheet_id = potential_sheets[0][0].upper() # Capitalize the sheet ID
         
     print(f"\n--- PAGE {page_num + 1} SHEET EXTRACTION ---")
     print(f"Top 3 Candidates closest to bottom-right: {[p[0] for p in potential_sheets[:3]]}")
@@ -536,40 +878,41 @@ def _process_page_task(args):
 
     page_matched_rects = []
     page_fixture_counts = {t: 0 for t in fixture_types_sorted}
-    page_fixture_instances = []  # NEW: List to store bounding box geometry
+    page_fixture_instances = []  # List to store bounding box geometry
 
     for fixture in fixture_types_sorted:
+        # PyMuPDF's search_for is case-insensitive. We filter by exact case below!
         candidates = page.search_for(fixture)
         if not candidates:
             continue
             
         for inst in candidates:
-            # Skip regions already claimed by a longer fixture code
-            if any(
-                not (inst.x1 + 2 < prev.x0 or prev.x1 + 2 < inst.x0 or
-                     inst.y1 + 2 < prev.y0 or prev.y1 + 2 < inst.y0)
-                for prev in page_matched_rects
-            ):
+            # Skip regions already claimed by a longer fixture code (e.g. A1 inside AA1)
+            if any(_rects_overlap(inst, prev) for prev in page_matched_rects):
                 continue
                 
-            is_exact = False
-            for w in words:
-                wx0, wy0, wx1, wy1 = w[0], w[1], w[2], w[3]
-                # Check overlap
-                if not (inst.x1 + 1 < wx0 or wx1 + 1 < inst.x0 or
-                        inst.y1 + 1 < wy0 or wy1 + 1 < inst.y0):
-                    
-                    wclean = w[4].strip()
-                    # Exact match OR fixture code followed by a slash/dash (e.g. A1/5)
-                    if wclean == fixture or re.match(r'^' + re.escape(fixture) + r'(?:[/\-]\d+)?$', wclean):
-                        is_exact = True
-                        break
+            # 2. STRICT SPATIAL BOUNDARY VERIFICATION
+            # Expand box slightly: 2pts up/down/left, and 30pts right to catch "/ 2" circuits.
+            check_rect = fitz.Rect(inst.x0 - 2, inst.y0 - 2, inst.x1 + 30, inst.y1 + 2)
             
-            if is_exact:
+            # Extract raw text from the box
+            surrounding_text = page.get_textbox(check_rect).strip()
+            
+            # Replace spaces to stitch CAD fragments ("A 1" -> "A1") 
+            # IMPORTANT: We do NOT strip \n newlines, so words like "BREAKROOM" stay separated!
+            compact_text = surrounding_text.replace(" ", "")
+            
+            # 3. EXACT CASE & VOCABULARY MATCHING
+            # This regex searches the string for the EXACT case of your fixture.
+            # It enforces that the character BEFORE and AFTER the fixture are NOT letters or numbers.
+            # E.g. "A1" inside "A1/2" -> MATCH. "A1" inside "A1X" -> FAILS. "A1" inside "a1" -> FAILS.
+            pattern = r'(?:^|[^a-zA-Z0-9])' + re.escape(fixture) + r'(?:[^a-zA-Z0-9]|$)'
+            
+            if re.search(pattern, compact_text):
                 page_fixture_counts[fixture] += 1
                 page_matched_rects.append(inst)
 
-                # NEW: Save the exact coordinates for the frontend (rounded to 2 decimals)
+                # Save the exact coordinates for the frontend (rounded to 2 decimals)
                 page_fixture_instances.append({
                     "id": f"{sheet_id}_{fixture}_{len(page_fixture_instances)}", # Unique ID for React
                     "type": fixture,
@@ -605,13 +948,14 @@ class TakeoffGenerator:
     Outputs:
     - fixture_results/fixture_takeoff_matrix.csv
     - fixture_results/fixture_counts.json
-    - fixture_results/fixture_instances.json  <-- NEW (for frontend interaction)
+    - fixture_results/fixture_instances.json  <-- (for frontend interaction)
     - fixture_results/overlays/overlay_SHEET.png
     """
     def __init__(self, csv_path, pdf_path, output_dir, page_sheet_labels: dict = None):
         self.csv_path = Path(csv_path) if csv_path else None
         self.pdf_path = Path(pdf_path) if pdf_path else None
-        
+        self.page_sheet_labels: dict = page_sheet_labels or {}
+
         # Define the new directory structure
         self.base_output = Path(output_dir) / "fixture_results"
         self.overlay_dir = self.base_output / "overlays"
@@ -619,9 +963,6 @@ class TakeoffGenerator:
         # Ensure directories exist
         self.overlay_dir.mkdir(parents=True, exist_ok=True)
         self.fixture_metadata = {}  # Stores {Code: Description}
-        # Optional {split_page_idx: sheet_label} from PlanSplitter.
-        # When provided, bypasses the bottom-right corner text detection.
-        self.page_sheet_labels: dict = page_sheet_labels or {}
 
     def _read_fixture_data(self):
         """Read CSV: Clean empty columns, then map Code and Description."""
@@ -749,7 +1090,7 @@ class TakeoffGenerator:
         # Aggregate per-page counts into the matrix
         matrix_counts = {t: {} for t in fixture_types}
         all_sheets = []
-        all_instances = {}  # NEW: Store all bounding box coordinates
+        all_instances = {}  # Store all bounding box coordinates
         
         for _page_num, sheet_id, page_counts, page_instances in results:
             if sheet_id not in all_sheets:
@@ -791,14 +1132,13 @@ class TakeoffGenerator:
         print(f"📁 Files saved in: {self.base_output}\n")
         return True
 
-
 if __name__ == "__main__":
     # Standard paths for standalone testing
-    BASE_OUT = "/home/ubuntu/project/cds_main/app.py/storage/4/56ce83bb-f5e5-450b-a599-5a8206c5d5a3/pipeline" 
+    BASE_OUT = "/home/ubuntu/project/cds_main/app.py/storage/10/2130a24e-82c9-4416-bf77-241ae6ab05b5/pipeline" 
     
     generator = TakeoffGenerator(
-        f"/home/ubuntu/project/cds_main/app.py/storage/4/56ce83bb-f5e5-450b-a599-5a8206c5d5a3/pipeline/lighting_schedule.csv", 
-        f"/home/ubuntu/project/cds_main/app.py/storage/4/56ce83bb-f5e5-450b-a599-5a8206c5d5a3/pipeline/lighting_panel_plans.pdf", 
+        f"/home/ubuntu/project/cds_main/app.py/storage/10/2130a24e-82c9-4416-bf77-241ae6ab05b5/pipeline/lighting_schedule.csv", 
+        f"/home/ubuntu/project/cds_main/app.py/storage/10/2130a24e-82c9-4416-bf77-241ae6ab05b5/pipeline/lighting_panel_plans.pdf", 
         BASE_OUT
     )
     generator.generate()

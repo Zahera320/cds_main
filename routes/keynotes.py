@@ -1,14 +1,15 @@
 """
 Key Notes Routes
 =================
-Endpoint for extracting key / general notes from document pages.
+Endpoint for extracting key notes from Lightning (LIGHTING_PLAN) pages
+using VLM (Gemini Vision) exclusively.
 
 Service:  Key Notes
 Prefix:   /documents
 Tag:      Key Notes
 
 Endpoints:
-    GET  /documents/{document_id}/keynotes   Extract notes from relevant pages
+    GET  /documents/{document_id}/keynotes   Extract key notes from lighting pages
 """
 
 import logging
@@ -23,7 +24,7 @@ from services.document_service import DocumentService
 
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from processing.keynote_extractor import extract_keynotes
+from processing.keynote_extractor import extract_keynotes_vlm
 
 logger = logging.getLogger(__name__)
 
@@ -40,11 +41,10 @@ def get_document_keynotes(
         description="Filter pages: 'relevant', 'all', or omit for relevant only",
     ),
 ):
-    """Extract key notes and general notes from document pages.
+    """Extract key notes from Lightning (LIGHTING_PLAN) pages using VLM.
 
-    Returns structured notes parsed from the extracted text of each page
-    that contains a KEY NOTES, GENERAL NOTES, ELECTRICAL NOTES, or
-    LIGHTING NOTES section.
+    Returns structured key notes extracted via Gemini Vision from the
+    top-left corner of each LIGHTING_PLAN page.
     """
     try:
         doc = DocumentService.get_user_document(db, document_id, current_user.id)
@@ -53,17 +53,20 @@ def get_document_keynotes(
 
         query = db.query(models.DocumentPage).filter(
             models.DocumentPage.document_id == document_id,
-            models.DocumentPage.extracted_text.isnot(None),
+            models.DocumentPage.page_type == "LIGHTING_PLAN",
         )
         if relevance != "all":
             query = query.filter(models.DocumentPage.is_relevant == True)
 
         pages = query.order_by(models.DocumentPage.page_number).all()
 
+        # VLM-only extraction from LIGHTING_PLAN pages
+        page_notes_map = extract_keynotes_vlm(pages)
+
         page_keynotes = []
         total_notes = 0
         for page in pages:
-            notes = extract_keynotes(page.extracted_text or "")
+            notes = page_notes_map.get(page.page_number, [])
             if notes:
                 total_notes += len(notes)
                 page_keynotes.append({
