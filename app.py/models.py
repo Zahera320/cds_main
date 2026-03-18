@@ -79,6 +79,7 @@ class DocumentPage(Base):
     image_path = Column(String, nullable=True)               # Path to 300-DPI PNG
     page_type = Column(String, nullable=True)                # Classified page type (e.g. LIGHTING_PLAN)
     is_relevant = Column(Boolean, nullable=True)             # True if relevant for fixture analysis
+    has_fixture_schedule = Column(Boolean, nullable=True, default=False)  # True if page contains Light Fixture Schedule
     vlm_page_type = Column(String, nullable=True)            # VLM verification result
     vlm_confidence = Column(String, nullable=True)           # VLM confidence: high/medium/low
     vlm_agrees = Column(Boolean, nullable=True)              # True if VLM agrees with rule-based

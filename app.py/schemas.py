@@ -1,6 +1,6 @@
 from pydantic import BaseModel, EmailStr, Field, field_validator, ConfigDict
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Dict
 
 # User schemas
 class UserRegister(BaseModel):
@@ -102,6 +102,7 @@ class DocumentPageResponse(BaseModel):
     image_path: Optional[str]
     page_type: Optional[str] = None
     is_relevant: Optional[bool] = None
+    has_fixture_schedule: Optional[bool] = None
     confidence_source: Optional[str] = None
     vlm_page_type: Optional[str] = None
     vlm_confidence: Optional[str] = None
@@ -113,7 +114,12 @@ class DocumentPageResponse(BaseModel):
 # ── Fixture extraction schemas ────────────────────────────────────────────────
 
 class FixtureResponse(BaseModel):
-    """A single luminaire fixture record extracted from a schedule table."""
+    """A single luminaire fixture record extracted from a schedule table.
+
+    Standard fields (code, description, etc.) are mapped from known column aliases.
+    The `raw_data` dict contains ALL columns from the original table with their
+    original header names as keys - this enables fully dynamic extraction.
+    """
     code: str = ""
     description: str = ""
     mounting: str = ""
@@ -123,6 +129,8 @@ class FixtureResponse(BaseModel):
     cct: str = ""
     dimming: str = ""
     max_va: str = ""
+    # Dynamic storage: ALL columns from original table {header_name: cell_value}
+    raw_data: Dict[str, str] = {}
 
 
 class FixtureExtractionResponse(BaseModel):

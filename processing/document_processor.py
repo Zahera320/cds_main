@@ -238,9 +238,9 @@ def _run_processing_inner(db: Session, document, document_id: str, user_id: int)
                 # Verify uncertain results
                 elif page_type == "OTHER":
                     pages_needing_vlm.add(pn)
-                # Verify SCHEDULE pages to confirm luminaire vs panel
-                elif page_type == "SCHEDULE":
-                    pages_needing_vlm.add(pn)
+                # NOTE: SCHEDULE pages with high confidence (sheet_index, title_block)
+                # are NOT sent to VLM. Low-confidence SCHEDULE pages are already
+                # captured by the "full_text"/"filename" check above.
 
             if pages_needing_vlm:
                 logger.info(
@@ -275,6 +275,7 @@ def _run_processing_inner(db: Session, document, document_id: str, user_id: int)
             cls_info = classifications.get(pn, {})
             pr["page_type"]      = cls_info.get("page_type")
             pr["is_relevant"]    = cls_info.get("is_relevant")
+            pr["has_fixture_schedule"] = cls_info.get("has_fixture_schedule", False)
             pr["sheet_code"]     = cls_info.get("sheet_code")
             pr["confidence_source"] = cls_info.get("confidence_source")
             pr["vlm_page_type"]  = cls_info.get("vlm_page_type")
@@ -328,7 +329,7 @@ def _run_processing_inner(db: Session, document, document_id: str, user_id: int)
     # plan splitting → takeoff generation pipeline.
     try:
         _run_autocount_pipeline(
-            pdf_path, user_id, document_id, classifications, total_pages
+            pdf_path, user_id, document_id, classifications, total_pages, page_texts
         )
     except Exception as exc:
         logger.warning(
@@ -362,6 +363,7 @@ def _vlm_table_pipeline(
     pipeline_dir: str,
     csv_path: str | None,
     classifications: dict,
+    fixture_schedule_pages: list = None,
 ) -> str | None:
     """
     VLM table verification + extraction fallback.
@@ -377,27 +379,43 @@ def _vlm_table_pipeline(
 
     # ── Case 1: Verify the existing schedule ──────────────────────────────
     if csv_path:
-        # Find which pages were classified as SCHEDULE
-        schedule_pages = [
-            pn for pn, info in classifications.items()
-            if info.get("page_type") in ("SCHEDULE", "LIGHTING_SCHEDULE")
-        ]
-        if schedule_pages:
-            # Spot-check the first schedule page to confirm it's a fixture schedule
-            pn = schedule_pages[0]
+        # Use the actual pages where fixture schedules were found,
+        # NOT just SCHEDULE-classified pages (which may be panel schedules)
+        pages_to_verify = fixture_schedule_pages or []
+
+        if not pages_to_verify:
+            # Fallback: check SCHEDULE-classified pages if no fixture pages tracked
+            pages_to_verify = [
+                pn for pn, info in classifications.items()
+                if info.get("page_type") in ("SCHEDULE", "LIGHTING_SCHEDULE")
+            ]
+
+        if pages_to_verify:
+            # Verify the first page where we actually found a fixture schedule
+            pn = pages_to_verify[0]
             vlm_result = vlm_verify_table(pdf_path, pn)
             if vlm_result and not vlm_result["has_fixture_schedule"]:
                 logger.warning(
                     "VLM says page %d is NOT a Light Fixture Schedule "
-                    "(conf=%s) — discarding Docling CSV",
+                    "(conf=%s) — discarding Docling CSV AND marking page irrelevant",
                     pn, vlm_result["confidence"],
                 )
+                # Override relevance when VLM disagrees with high confidence
+                if pn in classifications:
+                    classifications[pn]["is_relevant"] = False
+                    classifications[pn]["has_fixture_schedule"] = False
                 csv_path = None  # fall through to extraction below
             else:
                 logger.info(
                     "VLM confirmed page %d has a Light Fixture Schedule",
                     pn,
                 )
+                # Ensure relevance is set and track the fixture schedule
+                if pn in classifications:
+                    if not classifications[pn].get("is_relevant"):
+                        classifications[pn]["is_relevant"] = True
+                        logger.info("  Page %d marked RELEVANT (VLM confirmation)", pn)
+                    classifications[pn]["has_fixture_schedule"] = True
         return csv_path
 
     # ── Case 2: No schedule found — try VLM extraction on SCHEDULE pages ──
@@ -424,6 +442,12 @@ def _vlm_table_pipeline(
                 "VLM extracted %d fixtures from page %d",
                 len(fixtures), pn,
             )
+            # Mark this page as having a fixture schedule
+            if pn in classifications:
+                if not classifications[pn].get("is_relevant"):
+                    classifications[pn]["is_relevant"] = True
+                    logger.info("  Page %d marked RELEVANT (VLM extraction)", pn)
+                classifications[pn]["has_fixture_schedule"] = True
 
     if all_fixtures:
         # Write structured fixtures as CSV
@@ -453,6 +477,7 @@ def _run_autocount_pipeline(
     document_id: str,
     classifications: dict,
     total_pages: int,
+    page_texts: dict = None,
 ) -> None:
     """
     Run the integrated autocount pipeline:
@@ -472,6 +497,23 @@ def _run_autocount_pipeline(
         if info.get("page_type") in ("SCHEDULE", "LIGHTING_SCHEDULE")
     ) or None  # None → fall back to processing all pages
 
+    # Also include pages that contain "light fixture schedule" keywords in text
+    # This catches misclassified pages (e.g., RISER pages with fixture schedules)
+    if page_texts and schedule_pages is not None:
+        fixture_keyword_pattern = re.compile(
+            r"LIGHT(?:ING)?\s+(?:FIXTURE\s+)?SCHEDULE", re.IGNORECASE
+        )
+        extra_pages = []
+        for pn, text in page_texts.items():
+            if pn not in schedule_pages and fixture_keyword_pattern.search(text or ""):
+                extra_pages.append(pn)
+        if extra_pages:
+            logger.info(
+                ">>> Step 8a: Including %d additional pages with fixture schedule keywords: %s",
+                len(extra_pages), extra_pages
+            )
+            schedule_pages = sorted(set(schedule_pages) | set(extra_pages))
+
     if schedule_pages:
         logger.info(
             ">>> Step 8a: Textract targeted at %d SCHEDULE page(s): %s",
@@ -490,6 +532,7 @@ def _run_autocount_pipeline(
     )
     docling_result = docling_ext.run()
     extracted_txt_path = docling_result.combined_txt_path
+    fixture_schedule_pages = docling_result.fixture_schedule_pages  # Track pages with Light Fixture Schedules
 
     # Release Docling objects immediately — results are saved to disk
     del docling_ext
@@ -501,19 +544,54 @@ def _run_autocount_pipeline(
     if not csv_path and extracted_txt_path:
         logger.info(">>> Step 8b: Docling schedule not found — running ScheduleIsolator...")
         parser = ScheduleIsolator(extracted_txt_path, pipeline_dir)
-        csv_path = parser.create_schedule_csv()
+        csv_path, schedule_page_nums = parser.create_schedule_csv()
+        # Merge ScheduleIsolator page numbers into fixture_schedule_pages
+        if schedule_page_nums:
+            for pn in schedule_page_nums:
+                if pn not in fixture_schedule_pages:
+                    fixture_schedule_pages.append(pn)
+            logger.info(
+                ">>> ScheduleIsolator found Light Fixture Schedule on pages %s",
+                schedule_page_nums
+            )
     else:
         logger.info(">>> Step 8b: Light Fixture Schedule identified by Docling")
 
     # Release docling_result now that we've extracted what we need
     del docling_result
 
+    # Step 8b-override: Light Fixture Schedule → RELEVANT rule
+    # If we detected Light Fixture Schedule tables on any pages, mark them as relevant
+    if fixture_schedule_pages:
+        logger.info(
+            ">>> Step 8b-override: Applying Light Fixture Schedule → RELEVANT rule for pages %s",
+            fixture_schedule_pages
+        )
+        for pn in fixture_schedule_pages:
+            if pn in classifications:
+                old_relevance = classifications[pn].get("is_relevant", False)
+                old_type = classifications[pn].get("page_type", "UNKNOWN")
+                if not old_relevance:
+                    classifications[pn]["is_relevant"] = True
+                    classifications[pn]["has_fixture_schedule"] = True
+                    logger.info(
+                        "  Page %d override: type=%s, was_relevant=%s → RELEVANT (Light Fixture Schedule detected)",
+                        pn, old_type, old_relevance
+                    )
+                else:
+                    # Already relevant, just track the reason
+                    classifications[pn]["has_fixture_schedule"] = True
+                    logger.debug(
+                        "  Page %d already relevant, marking has_fixture_schedule=True",
+                        pn
+                    )
+
     # Step 8b-vlm: VLM table verification + fallback extraction
     # If VLM is available, verify the schedule and fall back to VLM extraction
     # when Docling produced no schedule from SCHEDULE-classified pages.
     if is_vlm_available():
         csv_path = _vlm_table_pipeline(
-            pdf_path, pipeline_dir, csv_path, classifications,
+            pdf_path, pipeline_dir, csv_path, classifications, fixture_schedule_pages,
         )
 
     # Step 8c: Plan splitting
@@ -675,7 +753,7 @@ def reclassify_document_pages(document_id: str, user_id: int) -> None:
             # Re-run autocount pipeline with new classifications
             try:
                 _run_autocount_pipeline(
-                    pdf_path, user_id, document_id, classifications, total_pages
+                    pdf_path, user_id, document_id, classifications, total_pages, page_texts
                 )
             except Exception as exc:
                 logger.warning(

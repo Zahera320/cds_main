@@ -38,7 +38,12 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class FixtureRecord:
-    """A single luminaire fixture extracted from a schedule table."""
+    """A single luminaire fixture extracted from a schedule table.
+
+    Standard fields are mapped from known column aliases for backwards compatibility.
+    The `raw_data` dict contains ALL columns from the original table with their
+    original header names as keys - this enables fully dynamic extraction.
+    """
     code: str = ""
     description: str = ""
     mounting: str = ""
@@ -48,9 +53,13 @@ class FixtureRecord:
     cct: str = ""
     dimming: str = ""
     max_va: str = ""
+    # Dynamic storage: ALL columns from original table {header_name: cell_value}
+    raw_data: Dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        d = asdict(self)
+        # Ensure raw_data is included (asdict handles it, but be explicit)
+        return d
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -933,15 +942,38 @@ def _is_data_row(row: list, code_col: int) -> bool:
     return True
 
 
-def _parse_row(row: list, mapping: Dict[str, int]) -> FixtureRecord:
-    """Convert a data row to a FixtureRecord using the column mapping."""
+def _parse_row(row: list, mapping: Dict[str, int], header_row: list = None) -> FixtureRecord:
+    """Convert a data row to a FixtureRecord using the column mapping.
+
+    Args:
+        row: The data row cells.
+        mapping: Dict mapping field names to column indices.
+        header_row: Optional header row to populate raw_data with ALL columns.
+                    If provided, every column value is stored in raw_data using
+                    the original header as the key.
+    """
     record = FixtureRecord()
     code_col = mapping.get("code")
 
+    # Populate standard fields using the known mapping
     for field_name, col_idx in mapping.items():
         if col_idx < len(row):
             value = row[col_idx].strip()
             setattr(record, field_name, value)
+
+    # DYNAMIC EXTRACTION: Store ALL columns in raw_data with original header names
+    if header_row:
+        for col_idx, cell_value in enumerate(row):
+            if col_idx < len(header_row):
+                header_name = header_row[col_idx].strip()
+                if header_name:  # Only store non-empty headers
+                    record.raw_data[header_name] = cell_value.strip()
+                else:
+                    # Use a generic name for empty headers
+                    record.raw_data[f"Column_{col_idx + 1}"] = cell_value.strip()
+            else:
+                # Extra columns beyond header - store with generic name
+                record.raw_data[f"Column_{col_idx + 1}"] = cell_value.strip()
 
     # --- Fixture code cleaning ---
     # Docling often merges the fixture code cell with adjacent description
@@ -1048,12 +1080,12 @@ def _parse_table(table: list, *, skip_classification: bool = False) -> List[Fixt
 
     synthetic_row = _detect_embedded_data(header_row, mapping)
     if synthetic_row is not None and _is_data_row(synthetic_row, code_col):
-        fixtures.append(_parse_row(synthetic_row, mapping))
+        fixtures.append(_parse_row(synthetic_row, mapping, header_row))
 
-    # Parse data rows
+    # Parse data rows - pass header_row for dynamic extraction
     for row in table[data_start:]:
         if _is_data_row(row, code_col):
-            fixtures.append(_parse_row(row, mapping))
+            fixtures.append(_parse_row(row, mapping, header_row))
 
     # Layer 6 — post-parse panel rejection
     if fixtures and _reject_panel_schedule(fixtures):

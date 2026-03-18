@@ -16,6 +16,7 @@ import os
 import re
 import logging
 from pathlib import Path
+from typing import Optional, List, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -89,13 +90,16 @@ class ScheduleIsolator:
         table_lower = table_string[:500].lower()
         return any(kw in table_lower for kw in _SHEET_INDEX_KEYWORDS)
 
-    def extract_schedule_csv_string(self):
+    def extract_schedule_csv_string(self) -> Tuple[Optional[str], List[int]]:
         """
         State machine to read the text file, isolate table blocks, and check
         if they belong to the lighting schedule based on surrounding text or content.
 
-        Returns the best matching fixture schedule table, preferring tables with
-        actual fixture column headers over sheet index tables.
+        Returns a tuple of (csv_content, page_numbers) where:
+        - csv_content: the best matching fixture schedule table content
+        - page_numbers: list of page numbers where fixture schedules were found
+
+        Prefers tables with actual fixture column headers over sheet index tables.
         """
         if not self.input_txt.exists():
             raise FileNotFoundError(f"Input text file not found: {self.input_txt}")
@@ -106,16 +110,28 @@ class ScheduleIsolator:
         state = "TEXT"
         recent_text = []
         current_table = []
+        current_page = 0  # Track current page from === PAGE N === markers
+        table_start_page = 0  # Page where current table started
         # Collect all candidates — pick the best one at the end
         candidates = []
 
+        # Pattern to match page markers: === PAGE N === or similar
+        page_marker_pattern = re.compile(r'===\s*PAGE\s+(\d+)\s*===', re.IGNORECASE)
+
         for line in lines:
             clean_line = line.strip()
+
+            # Track current page number from page markers
+            page_match = page_marker_pattern.search(clean_line)
+            if page_match:
+                current_page = int(page_match.group(1))
+                continue  # Don't process page markers as content
 
             if state == "TEXT":
                 # Look for the start of a table block
                 if clean_line.startswith("TABLE ") and "rows" in clean_line.lower():
                     state = "EXPECT_TABLE_START_SEP"
+                    table_start_page = current_page  # Remember which page this table is on
                 else:
                     # Keep track of recent non-formatting text to catch headers
                     if (
@@ -153,6 +169,7 @@ class ScheduleIsolator:
                             "is_fixture": is_fixture,
                             "is_index": is_index,
                             "row_count": len(current_table),
+                            "page_number": table_start_page,  # Track source page
                         })
 
                     # Reset and keep looking
@@ -163,34 +180,46 @@ class ScheduleIsolator:
                     current_table.append(clean_line)
 
         if not candidates:
-            return None
+            return None, []
+
+        # Collect all page numbers where fixture schedules were found
+        all_fixture_pages = [
+            c["page_number"] for c in candidates
+            if c["is_fixture"] and not c["is_index"] and c["page_number"] > 0
+        ]
 
         # Prefer tables that look like actual fixture schedules
         fixture_tables = [c for c in candidates if c["is_fixture"] and not c["is_index"]]
         if fixture_tables:
             # Pick the one with the most rows
             best = max(fixture_tables, key=lambda c: c["row_count"])
-            return best["table"]
+            return best["table"], all_fixture_pages
 
         # Fallback: pick any non-index table
         non_index = [c for c in candidates if not c["is_index"]]
         if non_index:
             best = max(non_index, key=lambda c: c["row_count"])
-            return best["table"]
+            # Include page numbers from non-index candidates
+            non_index_pages = [c["page_number"] for c in non_index if c["page_number"] > 0]
+            return best["table"], non_index_pages
 
         # Last resort: use the largest candidate
         best = max(candidates, key=lambda c: c["row_count"])
-        return best["table"]
+        return best["table"], [best["page_number"]] if best["page_number"] > 0 else []
 
-    def create_schedule_csv(self):
+    def create_schedule_csv(self) -> Tuple[Optional[str], List[int]]:
         """
         Executes the extraction and writes the resulting string to a file.
+
+        Returns a tuple of (csv_path, page_numbers) where:
+        - csv_path: path to the saved CSV file, or None if no schedule found
+        - page_numbers: list of page numbers where fixture schedules were found
         """
         logger.info(
             "Scanning %s for Lighting Schedule patterns...",
             self.input_txt.name,
         )
-        csv_content = self.extract_schedule_csv_string()
+        csv_content, page_numbers = self.extract_schedule_csv_string()
 
         if csv_content:
             output_csv_path = self.output_dir / "lighting_schedule.csv"
@@ -198,11 +227,12 @@ class ScheduleIsolator:
                 f.write(csv_content)
 
             logger.info(
-                "Lighting Schedule extracted to %s", output_csv_path
+                "Lighting Schedule extracted to %s (found on pages %s)",
+                output_csv_path, page_numbers if page_numbers else "unknown"
             )
-            return str(output_csv_path)
+            return str(output_csv_path), page_numbers
         else:
             logger.warning(
                 "Could not find any table matching the Lighting Schedule patterns."
             )
-            return None
+            return None, []

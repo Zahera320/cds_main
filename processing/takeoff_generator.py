@@ -832,11 +832,11 @@ def _rects_overlap(a: fitz.Rect, b: fitz.Rect, tolerance: float = 2.0) -> bool:
 def _process_page_task(args):
     """
     Worker function — processes a single PDF page in a thread.
-    Each thread opens its own fitz.Document handle, performs fixture search, 
+    Each thread opens its own fitz.Document handle, performs fixture search,
     draws overlays, renders the page to a PNG at 200 DPI, and returns counts
     AND exact bounding box coordinates.
     """
-    pdf_path, page_num, fixture_types_sorted, overlay_dir = args
+    pdf_path, page_num, fixture_types_sorted, overlay_dir, all_fixture_codes = args
 
     doc = fitz.open(str(pdf_path))
     page = doc[page_num]
@@ -847,10 +847,10 @@ def _process_page_task(args):
     # 1. SMART SHEET ID EXTRACTION (Geometry-Based)
     sheet_id = f"Page_{page_num + 1}"
     potential_sheets = []
-    
+
     # Regex for standard architectural sheet numbers (e.g., E101, ED-2.1, L300)
     sheet_regex = re.compile(r'^[A-Z]{1,3}[-]?\d{1,4}(?:\.\d{1,3})?[A-Z]?$', re.IGNORECASE)
-    
+
     # Bottom-right corner coordinates of the page
     x_max = page.rect.x1
     y_max = page.rect.y1
@@ -858,8 +858,9 @@ def _process_page_task(args):
     for w in words:
         text_val = w[4].strip()
         text_val = re.sub(r'^[.,;:!]+|[.,;:!]+$', '', text_val)
-        
-        if sheet_regex.match(text_val) and text_val not in fixture_types_sorted:
+
+        # Filter out fixture codes (including base codes) from sheet ID candidates
+        if sheet_regex.match(text_val) and text_val not in all_fixture_codes:
             is_priority = bool(re.match(r'^(E|ED|EL|EP|L|LT|A|P|M)\d', text_val, re.IGNORECASE))
             potential_sheets.append((text_val, w[0], w[1], is_priority))
                 
@@ -965,73 +966,178 @@ class TakeoffGenerator:
         self.fixture_metadata = {}  # Stores {Code: Description}
 
     def _read_fixture_data(self):
-        """Read CSV: Clean empty columns, then map Code and Description."""
+        """Read CSV: Dynamically extract ALL columns from the fixture schedule.
+
+        Returns list of fixture codes.
+
+        Stores complete row data in self.fixture_full_data as:
+            {code: {header1: value1, header2: value2, ...}}
+
+        Also stores legacy self.fixture_metadata as {code: description} for
+        backwards compatibility with matrix generation.
+
+        Generates base codes by stripping common suffixes like -EM, -EMS, /EM
+        to handle cases where the schedule has "A1-EM" but the plan shows "A1".
+        """
         import pandas as pd
         import re
 
         try:
             # 1. READ CSV: use keep_default_na=False so empty cells are "" instead of NaN floats
             df = pd.read_csv(self.csv_path, header=None, keep_default_na=False).astype(str)
-            
+
             # 2. DATA CLEANING: Remove completely empty columns caused by leading commas
             df = df.apply(lambda x: x.str.strip())
-            df = df.loc[:, (df != '').any(axis=0)] # Drop columns where every value is ''
-            
+            df = df.loc[:, (df != '').any(axis=0)]  # Drop columns where every value is ''
+
             if df.empty or len(df.columns) == 0:
                 return []
 
             # Reset column indices after dropping the empty ones
             df.columns = range(df.columns.size)
 
-            # 3. FORCE ASSUMPTION: The first non-empty column is ALWAYS the Fixture Code
-            code_col = 0
-            
-            # Find which column says "desc" in the first 3 rows
-            desc_col = 1
-            if len(df.columns) > 1:
-                for r_idx in range(min(3, len(df))):
-                    row_vals = [str(c).lower() for c in df.iloc[r_idx].values]
-                    try:
-                        desc_col = next(i for i, cell in enumerate(row_vals) if "desc" in cell)
-                        break  # Found it! Stop searching.
-                    except StopIteration:
-                        continue
+            # 3. DETECT HEADER ROW: Find the row that looks like column headers
+            #    (contains keywords like 'type', 'description', 'voltage', etc.)
+            header_keywords = {
+                'type', 'mark', 'code', 'fixture', 'symbol', 'description', 'desc',
+                'voltage', 'mounting', 'lumens', 'wattage', 'cct', 'dimming', 'driver',
+                'ballast', 'manufacturer', 'catalog', 'style', 'color', 'lens',
+                'qty', 'quantity', 'remarks', 'notes'
+            }
 
-            # 4. Extract the data
-            for _, row in df.iterrows():
-                c = str(row.iloc[code_col]).strip()
-                d = str(row.iloc[desc_col]).strip() if len(row.values) > desc_col else "No Description"
+            header_row_idx = 0
+            max_header_matches = 0
+            for r_idx in range(min(5, len(df))):  # Check first 5 rows for header
+                row_vals = [str(c).lower().strip() for c in df.iloc[r_idx].values]
+                matches = sum(1 for val in row_vals if any(kw in val for kw in header_keywords))
+                if matches > max_header_matches:
+                    max_header_matches = matches
+                    header_row_idx = r_idx
 
-                # Docling edge-case: sometimes the last column repeats the pure code. 
+            # Use the detected header row, or row 0 if none found
+            header_row = [str(c).strip() for c in df.iloc[header_row_idx].values]
+
+            # Clean up header names - make them unique
+            seen_headers = {}
+            clean_headers = []
+            for i, h in enumerate(header_row):
+                if not h or h.lower() in ['nan', '']:
+                    h = f"Column_{i + 1}"
+                # Handle duplicate headers by appending a number
+                if h in seen_headers:
+                    seen_headers[h] += 1
+                    h = f"{h}_{seen_headers[h]}"
+                else:
+                    seen_headers[h] = 1
+                clean_headers.append(h)
+
+            # 4. FIND CODE AND DESCRIPTION COLUMNS
+            code_col = 0  # Default: first column is code
+            desc_col = 1  # Default: second column is description
+
+            for i, h in enumerate(clean_headers):
+                h_lower = h.lower()
+                if any(kw in h_lower for kw in ['type', 'mark', 'code', 'symbol', 'fixture id']):
+                    code_col = i
+                    break
+
+            for i, h in enumerate(clean_headers):
+                h_lower = h.lower()
+                if 'desc' in h_lower:
+                    desc_col = i
+                    break
+
+            # 5. EXTRACT ALL DATA - store complete row data for each fixture
+            self.fixture_full_data = {}  # {code: {header: value, ...}}
+            self.fixture_metadata = {}   # {code: description} for backwards compat
+
+            data_start_row = header_row_idx + 1
+            bad_words = {'nan', '', 'type', 'mark', 'label', 'code', 'symbol',
+                         'fixture', 'description', 'letter', 'id'}
+
+            for r_idx in range(data_start_row, len(df)):
+                row = df.iloc[r_idx]
+                c = str(row.iloc[code_col]).strip() if code_col < len(row) else ""
+
+                # Docling edge-case: sometimes the last column repeats the pure code
                 last_val = str(row.iloc[-1]).strip()
                 sec_last_val = str(row.iloc[-2]).strip() if len(row.values) >= 2 else ""
-                
                 alt_code = last_val if last_val and last_val.lower() not in ['nan', ''] else sec_last_val
-                
+
                 if alt_code and len(alt_code) <= 6 and " " not in alt_code and (len(c) > 6 or " " in c):
                     c = alt_code
 
                 # Remove stray quotes
                 c = re.sub(r'^[\'"]+|[\'"]+$', '', c)
+
+                # PDF Garbage Filter
+                if not c or c.lower() in bad_words or len(c) > 15:
+                    continue
+
+                # Build complete row data with all columns
+                row_data = {}
+                for col_idx, header in enumerate(clean_headers):
+                    if col_idx < len(row):
+                        val = str(row.iloc[col_idx]).strip()
+                        val = re.sub(r'^[\'"]+|[\'"]+$', '', val)  # Remove quotes
+                        row_data[header] = val
+                    else:
+                        row_data[header] = ""
+
+                # Get description for backwards compatibility
+                d = str(row.iloc[desc_col]).strip() if desc_col < len(row) else "No Description"
                 d = re.sub(r'^[\'"]+|[\'"]+$', '', d)
 
-                # 5. PDF Garbage Filter
-                bad_words = ['nan', '', 'type', 'mark', 'label', 'code', 'symbol', 'fixture', 'description', 'letter']
-                if c and c.lower() not in bad_words:
-                    # A fixture code should never be a massive paragraph
-                    if len(c) <= 15: 
-                        self.fixture_metadata[c] = d if d else "No Description"
+                self.fixture_full_data[c] = row_data
+                self.fixture_metadata[c] = d if d else "No Description"
 
             # 6. HANDLE MERGED CELLS (e.g., "E3 E4" -> Splits into "E3" and "E4")
             final_fixtures = {}
+            final_full_data = {}
             for code, desc in self.fixture_metadata.items():
+                full_data = self.fixture_full_data.get(code, {})
                 if " " in code and len(code) <= 12:
                     for split_code in code.split():
-                        final_fixtures[split_code.strip()] = desc
+                        sc = split_code.strip()
+                        final_fixtures[sc] = desc
+                        final_full_data[sc] = full_data.copy()
                 else:
                     final_fixtures[code] = desc
-            
+                    final_full_data[code] = full_data
+
             self.fixture_metadata = final_fixtures
+            self.fixture_full_data = final_full_data
+
+            # 7. GENERATE BASE CODES: Strip common suffixes like -EM, -EMS, /EM
+            self.base_code_map = {}
+            suffix_pattern = re.compile(r'[-/]?(?:EM|EMS|EMG|EMRG|24V|277V|120V)$', re.IGNORECASE)
+
+            extended_fixtures = {}
+            extended_full_data = {}
+            for code, desc in self.fixture_metadata.items():
+                extended_fixtures[code] = desc
+                extended_full_data[code] = self.fixture_full_data.get(code, {})
+
+                # Generate base code by stripping suffix
+                base_code = suffix_pattern.sub('', code)
+                if base_code and base_code != code and len(base_code) >= 1:
+                    if base_code not in extended_fixtures:
+                        extended_fixtures[base_code] = desc
+                        extended_full_data[base_code] = self.fixture_full_data.get(code, {})
+                        self.base_code_map[base_code] = code
+
+            self.fixture_metadata = extended_fixtures
+            self.fixture_full_data = extended_full_data
+            self.all_fixture_codes = set(extended_fixtures.keys())
+
+            # Log what we extracted
+            if self.fixture_full_data:
+                sample_code = next(iter(self.fixture_full_data))
+                sample_headers = list(self.fixture_full_data[sample_code].keys())
+                logger.info(
+                    "Extracted %d fixtures with %d columns: %s",
+                    len(self.fixture_full_data), len(sample_headers), sample_headers[:10]
+                )
 
             return list(self.fixture_metadata.keys())
 
@@ -1065,8 +1171,11 @@ class TakeoffGenerator:
         # Sort longest-first to prevent 'A1' from matching inside 'AA1'
         fixture_types_sorted = sorted(fixture_types, key=len, reverse=True)
 
+        # Get the set of all fixture codes (including base codes) for sheet ID filtering
+        all_fixture_codes = getattr(self, 'all_fixture_codes', set(fixture_types))
+
         tasks = [
-            (str(self.pdf_path), page_num, fixture_types_sorted, str(self.overlay_dir))
+            (str(self.pdf_path), page_num, fixture_types_sorted, str(self.overlay_dir), all_fixture_codes)
             for page_num in range(num_pages)
         ]
 

@@ -89,6 +89,7 @@ class DoclingResult:
     page_count: int = 0
     tables_json_path: str = ""             # JSON with all tables for route serving
     table_files: List[str] = field(default_factory=list)  # Paths to individual CSV files
+    fixture_schedule_pages: List[int] = field(default_factory=list)  # Page numbers with Light Fixture Schedules
 
 
 class DoclingExtractor:
@@ -400,6 +401,16 @@ class DoclingExtractor:
                 ]
                 cls = classify_table(rows)
                 if cls["is_fixture_schedule"]:
+                    # Track page numbers for this fixture schedule
+                    try:
+                        prov = table_item.prov
+                        if prov:
+                            for p in prov:
+                                if p.page_no not in result.fixture_schedule_pages:
+                                    result.fixture_schedule_pages.append(p.page_no)
+                    except Exception:
+                        pass
+
                     if len(rows) > best_rows:
                         best = {"table_index": idx, "df": df, "rows": rows}
                         best_rows = len(rows)
@@ -430,6 +441,10 @@ class DoclingExtractor:
                         for pn in sorted(table_pages):
                             vlm_data = vlm_extract_table(str(self.pdf_path), pn)
                             if vlm_data and vlm_data.get("fixtures"):
+                                # Track this page as containing a fixture schedule
+                                if pn not in result.fixture_schedule_pages:
+                                    result.fixture_schedule_pages.append(pn)
+
                                 import csv as csv_mod
                                 schedule_path = self.output_dir / "lighting_schedule.csv"
                                 fixtures = vlm_data["fixtures"]
@@ -564,6 +579,11 @@ class DoclingExtractor:
 
                 cls = classify_table(rows)
                 if cls["is_fixture_schedule"]:
+                    # Track which page this schedule is on
+                    page_num = tbl_entry.get("page_number", 0)
+                    if page_num > 0 and page_num not in result.fixture_schedule_pages:
+                        result.fixture_schedule_pages.append(page_num)
+
                     if len(rows) > best_rows:
                         best = {"table_index": tbl_entry.get("table_index"), "rows": rows}
                         best_rows = len(rows)
@@ -573,6 +593,13 @@ class DoclingExtractor:
         if not best:
             logger.info("AWS Textract: no Light Fixture Schedule found")
             return
+
+        # Log which pages have fixture schedules
+        if result.fixture_schedule_pages:
+            logger.info(
+                "AWS Textract: Light Fixture Schedule found on page(s) %s",
+                result.fixture_schedule_pages
+            )
 
         # Save as CSV
         schedule_path = self.output_dir / "lighting_schedule.csv"

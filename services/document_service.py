@@ -140,7 +140,7 @@ class DocumentService:
         Expected keys in *page_data*:
             page_number, extracted_text, text_length, ocr_used, image_path
         Optional keys (page classification):
-            page_type, is_relevant, confidence_source, sheet_code
+            page_type, is_relevant, has_fixture_schedule, confidence_source, sheet_code
         """
         page = models.DocumentPage(
             document_id=document_id,
@@ -151,8 +151,12 @@ class DocumentService:
             image_path=page_data["image_path"],
             page_type=page_data.get("page_type"),
             is_relevant=page_data.get("is_relevant"),
+            has_fixture_schedule=page_data.get("has_fixture_schedule", False),
             confidence_source=page_data.get("confidence_source"),
             sheet_code=page_data.get("sheet_code"),
+            vlm_page_type=page_data.get("vlm_page_type"),
+            vlm_confidence=page_data.get("vlm_confidence"),
+            vlm_agrees=page_data.get("vlm_agrees"),
         )
         db.add(page)
         db.commit()
@@ -181,6 +185,7 @@ class DocumentService:
                 image_path=page_data["image_path"],
                 page_type=page_data.get("page_type"),
                 is_relevant=page_data.get("is_relevant"),
+                has_fixture_schedule=page_data.get("has_fixture_schedule", False),
                 confidence_source=page_data.get("confidence_source"),
                 sheet_code=page_data.get("sheet_code"),
                 vlm_page_type=page_data.get("vlm_page_type"),

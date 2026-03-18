@@ -456,7 +456,8 @@ def rerun_takeoff_pipeline(
         all_pages = DocumentService.get_all_pages(db, document_id)
         total_pages = len(all_pages)
         classifications = {p.page_number: {"page_type": p.page_type, "is_relevant": p.is_relevant} for p in all_pages}
-        
+        page_texts = {p.page_number: (p.extracted_text or "") for p in all_pages}
+
         uid = current_user.id
         doc_batch_id = document.batch_id
 
@@ -468,7 +469,7 @@ def rerun_takeoff_pipeline(
                 with open(running_flag, "w") as f:
                     f.write("running")
                 pdf_path = StorageService.locate_pdf(uid, document_id)
-                _run_autocount_pipeline(pdf_path, uid, document_id, classifications, total_pages)
+                _run_autocount_pipeline(pdf_path, uid, document_id, classifications, total_pages, page_texts)
             except Exception as exc:
                 logger.error("Takeoff rerun failed for %s: %s", document_id, exc)
             finally:
